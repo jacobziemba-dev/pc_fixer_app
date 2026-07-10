@@ -151,6 +151,29 @@ def update_layout_item_rect(item, window_rect):
 
 
 def saved_monitor_rects_for_layout(layout):
+    display_monitors = []
+    seen_displays = set()
+    for display in layout.get("displays", []) or []:
+        monitor_rect = display.get("monitor_rect") or display.get("rect")
+        if not is_rect(monitor_rect):
+            continue
+        key = (
+            display.get("device", ""),
+            int(monitor_rect["left"]),
+            int(monitor_rect["top"]),
+            int(monitor_rect["right"]),
+            int(monitor_rect["bottom"]),
+        )
+        if key in seen_displays:
+            continue
+        seen_displays.add(key)
+        display_monitors.append({
+            "device": display.get("device", "") or f"Display {len(display_monitors) + 1}",
+            "rect": monitor_rect,
+        })
+    if display_monitors:
+        return display_monitors
+
     monitors = []
     seen = set()
     for item in layout.get("windows", []):
@@ -268,6 +291,18 @@ def get_monitor_layouts():
     return monitors
 
 
+def collect_current_display_items():
+    return [
+        {
+            "device": monitor.get("device", ""),
+            "is_primary": bool(monitor.get("is_primary")),
+            "monitor_rect": monitor.get("monitor_rect", {}),
+            "work_rect": monitor.get("work_rect", {}),
+        }
+        for monitor in get_monitor_layouts()
+    ]
+
+
 def choose_monitor_rect(saved_window, current_monitors):
     if not current_monitors:
         return saved_window.get("monitor_rect") or {"left": 0, "top": 0, "right": 1280, "bottom": 720}
@@ -362,7 +397,7 @@ def enumerate_app_windows(include_self=False):
 
 
 def capture_current_layout(name):
-    return build_layout(name, collect_current_window_items())
+    return build_layout(name, collect_current_window_items(), displays=collect_current_display_items())
 
 
 def _window_to_layout_item(window, monitor):
@@ -428,14 +463,50 @@ def merge_layout_items(saved_items, current_items):
     return merged
 
 
-def build_layout(name, windows, layout_id=None, created_at=None):
+def _display_from_window_item(item):
+    monitor_rect = item.get("monitor_rect")
+    if not is_rect(monitor_rect):
+        return None
+    return {
+        "device": item.get("monitor_device", ""),
+        "is_primary": False,
+        "monitor_rect": monitor_rect,
+        "work_rect": item.get("work_rect") or monitor_rect,
+    }
+
+
+def displays_from_windows(windows):
+    displays = []
+    seen = set()
+    for item in windows or []:
+        display = _display_from_window_item(item)
+        if not display:
+            continue
+        rect = display["monitor_rect"]
+        key = (
+            display.get("device", ""),
+            int(rect["left"]),
+            int(rect["top"]),
+            int(rect["right"]),
+            int(rect["bottom"]),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        displays.append(display)
+    return displays
+
+
+def build_layout(name, windows, layout_id=None, created_at=None, displays=None):
     now = _now_iso()
+    windows = list(windows)
     return {
         "id": layout_id or str(uuid.uuid4()),
         "name": name,
         "created_at": created_at or now,
         "updated_at": now,
-        "windows": list(windows),
+        "displays": list(displays) if displays is not None else displays_from_windows(windows),
+        "windows": windows,
     }
 
 

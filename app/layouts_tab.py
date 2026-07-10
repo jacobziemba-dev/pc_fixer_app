@@ -13,14 +13,15 @@ from app import window_layouts
 
 
 class WindowItemsWorker(QThread):
-    finished_with_items = Signal(list, str)
+    finished_with_items = Signal(list, list, str)
 
     def run(self):
         try:
             items = window_layouts.collect_current_window_items()
-            self.finished_with_items.emit(items, "")
+            displays = window_layouts.collect_current_display_items()
+            self.finished_with_items.emit(items, displays, "")
         except Exception as exc:
-            self.finished_with_items.emit([], str(exc))
+            self.finished_with_items.emit([], [], str(exc))
 
 
 class ApplyLayoutWorker(QThread):
@@ -207,7 +208,7 @@ class LayoutPreviewDialog(QDialog):
 
 
 class LayoutEditDialog(QDialog):
-    def __init__(self, parent, layout, windows, checked_keys):
+    def __init__(self, parent, layout, windows):
         super().__init__(parent)
         self.setWindowTitle(f"Edit - {layout.get('name', 'Layout')}")
         self.resize(1180, 680)
@@ -216,7 +217,6 @@ class LayoutEditDialog(QDialog):
         self._checkboxes = []
         self._spin_rows = []
         self._syncing = False
-        checked_keys = set(checked_keys or [])
 
         outer = QVBoxLayout(self)
         title = QLabel(layout.get("name", "Untitled Layout"))
@@ -230,6 +230,15 @@ class LayoutEditDialog(QDialog):
         splitter = QSplitter(Qt.Horizontal)
         editor_group = QGroupBox("Windows")
         editor_layout = QVBoxLayout(editor_group)
+
+        add_layout = QHBoxLayout()
+        self.add_windows_btn = QPushButton("Add Open Windows")
+        self.add_windows_btn.setProperty("variant", "secondary")
+        self.add_windows_btn.clicked.connect(self.add_open_windows)
+        add_layout.addWidget(self.add_windows_btn)
+        add_layout.addStretch(1)
+        editor_layout.addLayout(add_layout)
+
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(["Use", "App", "Window", "X", "Y", "W", "H"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -259,14 +268,29 @@ class LayoutEditDialog(QDialog):
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
-        self._render(checked_keys)
+        self._render()
         self._refresh_preview()
 
-    def _render(self, checked_keys):
+    def _render(self, force_checked=None):
+        force_checked = set(force_checked or [])
+        checked_by_identity = {
+            window_layouts.layout_item_identity_key(item)
+            for item, checkbox in zip(self._windows, self._checkboxes)
+            if checkbox.isChecked()
+        }
+        if not self._checkboxes:
+            checked_by_identity = {
+                window_layouts.layout_item_identity_key(item)
+                for item in self._windows
+            }
+        checked_by_identity.update(force_checked)
+        self._checkboxes = []
+        self._spin_rows = []
+        self.table.setRowCount(0)
         self.table.setRowCount(len(self._windows))
         for row, item in enumerate(self._windows):
             checkbox = QCheckBox()
-            checkbox.setChecked(window_layouts.layout_item_key(item) in checked_keys)
+            checkbox.setChecked(window_layouts.layout_item_identity_key(item) in checked_by_identity)
             checkbox.stateChanged.connect(lambda _state: self._refresh_preview())
             cell = QWidget()
             cell_layout = QHBoxLayout(cell)
@@ -302,6 +326,42 @@ class LayoutEditDialog(QDialog):
             self._spin_rows.append(spin_row)
         self.table.resizeRowsToContents()
 
+    def add_open_windows(self):
+        try:
+            current_items = window_layouts.collect_current_window_items()
+        except Exception as exc:
+            QMessageBox.warning(self, "Window Scan Failed", f"Could not scan open windows:\n\n{exc}")
+            return
+        existing = {
+            window_layouts.layout_item_identity_key(item)
+            for item in self._windows
+        }
+        available = [
+            item for item in current_items
+            if window_layouts.layout_item_identity_key(item) not in existing
+        ]
+        if not available:
+            QMessageBox.information(self, "No New Windows", "No additional open windows were found.")
+            return
+        dialog = WindowSelectionDialog(
+            self,
+            "Add Open Windows",
+            "Select open windows to add to this layout draft.",
+            available,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        selected = dialog.selected_windows()
+        if not selected:
+            return
+        selected_keys = {
+            window_layouts.layout_item_identity_key(item)
+            for item in selected
+        }
+        self._windows.extend(copy.deepcopy(item) for item in selected)
+        self._render(force_checked=selected_keys)
+        self._refresh_preview()
+
     def _on_geometry_changed(self, row):
         if self._syncing or row < 0 or row >= len(self._windows):
             return
@@ -320,6 +380,7 @@ class LayoutEditDialog(QDialog):
 
     def _draft_layout(self):
         draft = dict(self._layout)
+        draft["displays"] = self._layout.get("displays") or window_layouts.displays_from_windows(self._windows)
         draft["windows"] = self._selected_windows()
         return draft
 
@@ -338,6 +399,7 @@ class LayoutEditDialog(QDialog):
             self._selected_windows(),
             layout_id=self._layout.get("id"),
             created_at=self._layout.get("created_at"),
+            displays=self._layout.get("displays") or window_layouts.displays_from_windows(self._windows),
         )
 
 
@@ -431,6 +493,7 @@ class LayoutsTab(QWidget):
         self._apply_worker = None
         self._pending_capture_name = ""
         self._pending_edit_index = -1
+        self._pending_capture_displays = []
         self.load()
 
     def load(self):
@@ -515,18 +578,17 @@ class LayoutsTab(QWidget):
         self._items_worker.finished_with_items.connect(self._on_window_items_loaded)
         self._items_worker.start()
 
-    def _on_window_items_loaded(self, items, error):
+    def _on_window_items_loaded(self, items, displays, error):
         self._set_busy(False)
         if error:
             QMessageBox.warning(self, "Window Scan Failed", f"Could not scan open windows:\n\n{error}")
             self.status_label.setText("Window scan failed.")
             self._pending_capture_name = ""
             self._pending_edit_index = -1
+            self._pending_capture_displays = []
             return
-        if self._pending_edit_index >= 0:
-            self._show_edit_dialog(items)
-        else:
-            self._show_capture_dialog(items)
+        self._pending_capture_displays = displays
+        self._show_capture_dialog(items)
 
     def _show_capture_dialog(self, items):
         if not items:
@@ -537,6 +599,7 @@ class LayoutsTab(QWidget):
             )
             self.status_label.setText("No app windows were found.")
             self._pending_capture_name = ""
+            self._pending_capture_displays = []
             return
         dialog = WindowSelectionDialog(
             self,
@@ -547,35 +610,39 @@ class LayoutsTab(QWidget):
         if dialog.exec() != QDialog.Accepted:
             self.status_label.setText("Layout capture was canceled.")
             self._pending_capture_name = ""
+            self._pending_capture_displays = []
             return
         selected = dialog.selected_windows()
         if not selected:
             QMessageBox.information(self, "Nothing Selected", "Choose at least one window to save a layout.")
             self.status_label.setText("No windows were selected.")
             self._pending_capture_name = ""
+            self._pending_capture_displays = []
             return
-        layout = window_layouts.build_layout(self._pending_capture_name, selected)
+        layout = window_layouts.build_layout(
+            self._pending_capture_name,
+            selected,
+            displays=self._pending_capture_displays,
+        )
         self._pending_capture_name = ""
+        self._pending_capture_displays = []
         self._layouts.append(layout)
         self._save_and_render(f"Saved \"{layout.get('name')}\" with {len(selected)} window(s).")
 
-    def _show_edit_dialog(self, current_items):
+    def _show_edit_dialog(self):
         index = self._pending_edit_index
         self._pending_edit_index = -1
         if index < 0 or index >= len(self._layouts):
             return
         layout = self._layouts[index]
         saved_items = layout.get("windows", [])
-        all_items = window_layouts.merge_layout_items(saved_items, current_items)
-        checked_keys = {window_layouts.layout_item_key(item) for item in saved_items}
-        if not all_items:
+        if not saved_items:
             QMessageBox.information(self, "No Windows Available", "No saved or open windows are available to edit.")
             return
         dialog = LayoutEditDialog(
             self,
             layout,
-            all_items,
-            checked_keys,
+            saved_items,
         )
         if dialog.exec() != QDialog.Accepted:
             self.status_label.setText("Layout edit was canceled.")
@@ -662,7 +729,7 @@ class LayoutsTab(QWidget):
             return
         self._pending_edit_index = index
         self._pending_capture_name = ""
-        self._load_current_windows("Finding open app windows for editing...")
+        self._show_edit_dialog()
 
     def delete_layout(self):
         index = self._selected_layout_index()

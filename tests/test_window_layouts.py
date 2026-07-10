@@ -124,16 +124,24 @@ def test_merge_layout_items_keeps_saved_first_and_dedupes():
 
 
 def test_build_layout_preserves_identity_when_editing():
+    displays = [{
+        "device": r"\\.\DISPLAY1",
+        "monitor_rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
+        "work_rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1040},
+        "is_primary": True,
+    }]
     layout = window_layouts.build_layout(
         "Work",
         [{"title": "Editor"}],
         layout_id="layout-1",
         created_at="2026-07-10T12:00:00",
+        displays=displays,
     )
 
     assert layout["id"] == "layout-1"
     assert layout["created_at"] == "2026-07-10T12:00:00"
     assert layout["name"] == "Work"
+    assert layout["displays"] == displays
     assert layout["windows"] == [{"title": "Editor"}]
 
 
@@ -210,6 +218,52 @@ def test_preview_scene_handles_missing_monitor_data():
     assert len(scene["monitors"]) == 1
     assert len(scene["windows"]) == 1
     assert scene["desktop_rect"] == {"left": 20, "top": 30, "right": 420, "bottom": 330}
+
+
+def test_preview_scene_uses_saved_displays_even_without_windows():
+    layout = {
+        "displays": [
+            {
+                "device": r"\\.\DISPLAY1",
+                "monitor_rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
+            },
+            {
+                "device": r"\\.\DISPLAY2",
+                "monitor_rect": {"left": 1920, "top": 0, "right": 3840, "bottom": 1080},
+            },
+        ],
+        "windows": [{
+            "title": "Editor",
+            "process_name": "editor.exe",
+            "monitor_device": r"\\.\DISPLAY1",
+            "monitor_rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
+            "window_rect": {"left": 0, "top": 0, "right": 960, "bottom": 540},
+        }],
+    }
+
+    scene = window_layouts.build_preview_scene(layout, 3840, 1080, padding=0)
+
+    assert [monitor["device"] for monitor in scene["monitors"]] == [r"\\.\DISPLAY1", r"\\.\DISPLAY2"]
+    assert len(scene["windows"]) == 1
+    assert scene["monitors"][1]["preview_rect"]["x"] == 1920
+
+
+def test_build_layout_derives_displays_from_windows_for_legacy_callers():
+    layout = window_layouts.build_layout(
+        "Legacy",
+        [{
+            "title": "Editor",
+            "monitor_device": r"\\.\DISPLAY1",
+            "monitor_rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
+        }],
+    )
+
+    assert layout["displays"] == [{
+        "device": r"\\.\DISPLAY1",
+        "is_primary": False,
+        "monitor_rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
+        "work_rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
+    }]
 
 
 def test_update_layout_item_rect_refreshes_relative_rect():

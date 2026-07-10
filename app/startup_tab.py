@@ -2,9 +2,18 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QLineEdit, QSplitter,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 
 from app import system_info as sysinfo
+
+
+class StartupLoadWorker(QThread):
+    finished_with_data = Signal(list, list)
+
+    def run(self):
+        startup_items = sysinfo.get_startup_items()
+        programs = sysinfo.get_installed_programs()
+        self.finished_with_data.emit(startup_items, programs)
 
 
 class StartupTab(QWidget):
@@ -15,8 +24,8 @@ class StartupTab(QWidget):
         header_layout = QHBoxLayout()
         title = QLabel("Startup Items & Installed Programs")
         title.setProperty("role", "heading")
-        subtitle = QLabel("Read-only view - nothing here is changed automatically.")
-        subtitle.setProperty("role", "caption")
+        self.status_label = QLabel("Read-only view - nothing here is changed automatically.")
+        self.status_label.setProperty("role", "caption")
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.setProperty("variant", "secondary")
         self.refresh_btn.clicked.connect(self.load)
@@ -24,7 +33,7 @@ class StartupTab(QWidget):
         header_layout.addStretch(1)
         header_layout.addWidget(self.refresh_btn)
         outer.addLayout(header_layout)
-        outer.addWidget(subtitle)
+        outer.addWidget(self.status_label)
 
         splitter = QSplitter(Qt.Vertical)
 
@@ -65,24 +74,33 @@ class StartupTab(QWidget):
         outer.addWidget(splitter, 1)
 
         self._all_programs = []
+        self._worker = None
         self.load()
 
     def load(self):
-        self._load_startup_items()
-        self._load_programs()
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self.status_label.setText("Loading startup items and installed programs...")
+        self.refresh_btn.setEnabled(False)
+        self._worker = StartupLoadWorker()
+        self._worker.finished_with_data.connect(self._on_loaded)
+        self._worker.start()
 
-    def _load_startup_items(self):
-        items = sysinfo.get_startup_items()
+    def _on_loaded(self, startup_items, programs):
+        self._populate_startup_items(startup_items)
+        self._all_programs = programs
+        self._render_programs(self._all_programs)
+        self.status_label.setText("Read-only view - nothing here is changed automatically.")
+        self.refresh_btn.setEnabled(True)
+        self._worker = None
+
+    def _populate_startup_items(self, items):
         self.startup_table.setSortingEnabled(False)
         self.startup_table.setRowCount(len(items))
         for row, item in enumerate(items):
             self.startup_table.setItem(row, 0, QTableWidgetItem(item["name"]))
             self.startup_table.setItem(row, 1, QTableWidgetItem(item["command"]))
             self.startup_table.setItem(row, 2, QTableWidgetItem(item["source"]))
-
-    def _load_programs(self):
-        self._all_programs = sysinfo.get_installed_programs()
-        self._render_programs(self._all_programs)
 
     def _render_programs(self, programs):
         self.programs_table.setSortingEnabled(False)

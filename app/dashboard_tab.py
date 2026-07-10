@@ -1,12 +1,15 @@
 import time
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QShowEvent, QHideEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea,
 )
 
 from app import system_info as sysinfo
+
+_REFRESH_INTERVAL_MS = 2000
 
 
 def _level_for(percent):
@@ -15,6 +18,26 @@ def _level_for(percent):
     if percent >= 60:
         return "warn"
     return ""
+
+
+def _set_bar_level(bar, percent):
+    level = _level_for(percent)
+    if bar.property("level") == level:
+        return
+    bar.setProperty("level", level)
+    bar.style().unpolish(bar)
+    bar.style().polish(bar)
+
+
+def _set_table_cell(table, row, col, text, user_data=None):
+    item = table.item(row, col)
+    if item is None:
+        item = QTableWidgetItem(text)
+        table.setItem(row, col, item)
+    else:
+        item.setText(text)
+    if user_data is not None:
+        item.setData(Qt.UserRole, user_data)
 
 
 class MetricCard(QGroupBox):
@@ -36,9 +59,7 @@ class MetricCard(QGroupBox):
         self.value_label.setText(value_text)
         self.caption_label.setText(caption_text)
         self.bar.setValue(int(percent))
-        self.bar.setProperty("level", _level_for(percent))
-        self.bar.style().unpolish(self.bar)
-        self.bar.style().polish(self.bar)
+        _set_bar_level(self.bar, percent)
 
 
 class DashboardTab(QWidget):
@@ -98,8 +119,17 @@ class DashboardTab(QWidget):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
-        self.timer.start(1500)
+        # Timer starts in showEvent so it only runs while this tab is visible.
+
+    def showEvent(self, event: QShowEvent):
+        super().showEvent(event)
         self.refresh()
+        if not self.timer.isActive():
+            self.timer.start(_REFRESH_INTERVAL_MS)
+
+    def hideEvent(self, event: QHideEvent):
+        self.timer.stop()
+        super().hideEvent(event)
 
     def refresh(self):
         self._refresh_cpu()
@@ -136,9 +166,7 @@ class DashboardTab(QWidget):
             bar.setValue(int(value))
             bar.setFormat(f"{value:.0f}%")
             bar.setTextVisible(True)
-            bar.setProperty("level", _level_for(value))
-            bar.style().unpolish(bar)
-            bar.style().polish(bar)
+            _set_bar_level(bar, value)
 
     def _refresh_memory(self):
         mem = sysinfo.get_memory_stats()
@@ -149,10 +177,10 @@ class DashboardTab(QWidget):
         drives = sysinfo.get_disk_usage()
         self.disks_table.setRowCount(len(drives))
         for row, d in enumerate(drives):
-            self.disks_table.setItem(row, 0, QTableWidgetItem(f"{d['device']} ({d['mountpoint']})"))
-            self.disks_table.setItem(row, 1, QTableWidgetItem(sysinfo.format_bytes(d["used"])))
-            self.disks_table.setItem(row, 2, QTableWidgetItem(sysinfo.format_bytes(d["free"])))
-            self.disks_table.setItem(row, 3, QTableWidgetItem(f"{d['percent']:.0f}%"))
+            _set_table_cell(self.disks_table, row, 0, f"{d['device']} ({d['mountpoint']})")
+            _set_table_cell(self.disks_table, row, 1, sysinfo.format_bytes(d["used"]))
+            _set_table_cell(self.disks_table, row, 2, sysinfo.format_bytes(d["free"]))
+            _set_table_cell(self.disks_table, row, 3, f"{d['percent']:.0f}%")
 
         if drives:
             primary = next((d for d in drives if d["mountpoint"].lower().startswith("c:")), drives[0])
@@ -180,7 +208,7 @@ class DashboardTab(QWidget):
         procs = sysinfo.get_top_processes(limit=10)
         self.procs_table.setRowCount(len(procs))
         for row, p in enumerate(procs):
-            self.procs_table.setItem(row, 0, QTableWidgetItem(str(p["pid"])))
-            self.procs_table.setItem(row, 1, QTableWidgetItem(p["name"]))
-            self.procs_table.setItem(row, 2, QTableWidgetItem(f"{p['cpu']:.1f}"))
-            self.procs_table.setItem(row, 3, QTableWidgetItem(sysinfo.format_bytes(p["mem"])))
+            _set_table_cell(self.procs_table, row, 0, str(p["pid"]))
+            _set_table_cell(self.procs_table, row, 1, p["name"])
+            _set_table_cell(self.procs_table, row, 2, f"{p['cpu']:.1f}")
+            _set_table_cell(self.procs_table, row, 3, sysinfo.format_bytes(p["mem"]))

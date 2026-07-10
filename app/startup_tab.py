@@ -7,6 +7,15 @@ from PySide6.QtCore import Qt, QThread, Signal
 from app import system_info as sysinfo
 
 
+class NumericTableWidgetItem(QTableWidgetItem):
+    def __lt__(self, other):
+        left = self.data(Qt.UserRole)
+        right = other.data(Qt.UserRole) if other is not None else None
+        if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+            return left < right
+        return super().__lt__(other)
+
+
 class StartupLoadWorker(QThread):
     finished_with_data = Signal(list, list)
 
@@ -109,7 +118,7 @@ class StartupTab(QWidget):
             self.programs_table.setItem(row, 0, QTableWidgetItem(p["name"]))
             self.programs_table.setItem(row, 1, QTableWidgetItem(str(p["version"])))
             self.programs_table.setItem(row, 2, QTableWidgetItem(str(p["publisher"])))
-            size_item = QTableWidgetItem(sysinfo.format_bytes(p["size_bytes"]) if p["size_bytes"] else "")
+            size_item = NumericTableWidgetItem(sysinfo.format_bytes(p["size_bytes"]) if p["size_bytes"] else "")
             size_item.setData(Qt.UserRole, p["size_bytes"])
             self.programs_table.setItem(row, 3, size_item)
         self.programs_table.setSortingEnabled(True)

@@ -649,10 +649,44 @@ def scan_cleanup_targets():
     return categories
 
 
+def _normalized_cleanup_path(path):
+    if not path:
+        return ""
+    try:
+        return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+    except OSError:
+        return ""
+
+
+def _allowed_cleanup_paths_by_key():
+    allowed = {}
+    for key, (_label, _desc, paths) in _candidate_dirs().items():
+        allowed[key] = {
+            normalized
+            for normalized in (_normalized_cleanup_path(path) for path in paths)
+            if normalized
+        }
+    return allowed
+
+
+def _is_path_within_allowed_roots(path, allowed_roots):
+    normalized = _normalized_cleanup_path(path)
+    if not normalized:
+        return False
+    for root in allowed_roots:
+        try:
+            if os.path.commonpath([normalized, root]) == root:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def delete_cleanup_items(categories):
     """Delete only the given, already-scanned categories. Returns (bytes_freed, errors)."""
     bytes_freed = 0
     errors = []
+    allowed_paths = _allowed_cleanup_paths_by_key()
 
     for cat in categories:
         if cat.is_recycle_bin:
@@ -664,6 +698,9 @@ def delete_cleanup_items(categories):
             continue
 
         for path in cat.paths:
+            if not _is_path_within_allowed_roots(path, allowed_paths.get(cat.key, set())):
+                errors.append(f"{cat.label}: skipped unsafe cleanup path {path}")
+                continue
             for root, dirs, files in os.walk(path, topdown=False, onerror=lambda e: None):
                 for fname in files:
                     fpath = os.path.join(root, fname)

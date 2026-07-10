@@ -658,6 +658,21 @@ def _wait_for_layout_windows(layout, timeout=8.0):
     return candidates
 
 
+def _target_rect_for_saved_window(saved_window, target_monitor):
+    relative_rect = saved_window.get("relative_rect")
+    if relative_rect:
+        return relative_to_rect(relative_rect, target_monitor)
+
+    window_rect = saved_window.get("window_rect")
+    if is_rect(window_rect):
+        source_monitor = saved_window.get("monitor_rect")
+        if not is_rect(source_monitor):
+            source_monitor = target_monitor
+        return relative_to_rect(rect_to_relative(window_rect, source_monitor), target_monitor)
+
+    raise ValueError("missing saved window geometry")
+
+
 def apply_layout(layout, launch_missing=True):
     candidates = enumerate_app_windows()
     missing_windows = missing_windows_for_layout(layout, candidates) if launch_missing else []
@@ -678,7 +693,11 @@ def apply_layout(layout, launch_missing=True):
             continue
         used_hwnds.add(match["hwnd"])
         target_monitor = choose_monitor_rect(saved_window, monitors)
-        target_rect = relative_to_rect(saved_window["relative_rect"], target_monitor)
+        try:
+            target_rect = _target_rect_for_saved_window(saved_window, target_monitor)
+        except (KeyError, TypeError, ValueError):
+            errors.append(f"{saved_window_label(saved_window)}: missing saved window geometry")
+            continue
         width = rect_width(target_rect)
         height = rect_height(target_rect)
         try:

@@ -409,6 +409,60 @@ def test_apply_layout_restores_saved_z_order(monkeypatch):
     assert [call[0] for call in restack_calls] == [30, 20, 10]
 
 
+def test_apply_layout_falls_back_to_saved_absolute_rect(monkeypatch):
+    saved_monitor_rect = {"left": 0, "top": 0, "right": 1000, "bottom": 500}
+    current_monitor_rect = {"left": 1000, "top": 0, "right": 3000, "bottom": 1000}
+    layout = {
+        "windows": [{
+            "title": "Editor",
+            "exe_path": r"C:\Apps\editor.exe",
+            "monitor_device": r"\\.\DISPLAY1",
+            "monitor_rect": saved_monitor_rect,
+            "window_rect": {"left": 100, "top": 50, "right": 600, "bottom": 300},
+        }],
+    }
+    candidates = [{"hwnd": 10, "exe_path": r"C:\Apps\editor.exe", "title": "Editor"}]
+    calls = []
+    monkeypatch.setattr(window_layouts, "enumerate_app_windows", lambda: candidates)
+    monkeypatch.setattr(window_layouts, "get_monitor_layouts", lambda: [{
+        "device": r"\\.\DISPLAY1",
+        "is_primary": True,
+        "work_rect": current_monitor_rect,
+        "monitor_rect": current_monitor_rect,
+    }])
+    monkeypatch.setattr(window_layouts.win32gui, "IsIconic", lambda _hwnd: False)
+    monkeypatch.setattr(window_layouts.win32gui, "SetWindowPos", lambda *args: calls.append(args))
+
+    result = window_layouts.apply_layout(layout, launch_missing=False)
+
+    assert result.moved == 1
+    move_call = calls[0]
+    assert move_call[2:6] == (1200, 100, 1000, 500)
+
+
+def test_apply_layout_reports_missing_geometry_without_crashing(monkeypatch):
+    layout = {
+        "windows": [{
+            "title": "Broken",
+            "exe_path": r"C:\Apps\broken.exe",
+            "monitor_device": r"\\.\DISPLAY1",
+        }],
+    }
+    candidates = [{"hwnd": 10, "exe_path": r"C:\Apps\broken.exe", "title": "Broken"}]
+    monkeypatch.setattr(window_layouts, "enumerate_app_windows", lambda: candidates)
+    monkeypatch.setattr(window_layouts, "get_monitor_layouts", lambda: [{
+        "device": r"\\.\DISPLAY1",
+        "is_primary": True,
+        "work_rect": {"left": 0, "top": 0, "right": 1000, "bottom": 500},
+        "monitor_rect": {"left": 0, "top": 0, "right": 1000, "bottom": 500},
+    }])
+
+    result = window_layouts.apply_layout(layout, launch_missing=False)
+
+    assert result.moved == 0
+    assert result.errors == ["Broken: missing saved window geometry"]
+
+
 def test_build_layout_derives_displays_from_windows_for_legacy_callers():
     layout = window_layouts.build_layout(
         "Legacy",

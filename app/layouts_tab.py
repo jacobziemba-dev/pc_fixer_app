@@ -1,10 +1,12 @@
+import copy
+
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QInputDialog,
     QSplitter, QAbstractItemView, QDialog, QDialogButtonBox, QCheckBox,
-    QScrollArea,
+    QScrollArea, QSpinBox,
 )
 
 from app import window_layouts
@@ -135,6 +137,10 @@ class LayoutPreviewCanvas(QWidget):
         self._layout = layout
         self.setMinimumSize(780, 440)
 
+    def set_layout(self, layout):
+        self._layout = layout
+        self.update()
+
     def paintEvent(self, event):
         super().paintEvent(event)
         painter = QPainter(self)
@@ -198,6 +204,141 @@ class LayoutPreviewDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
+
+
+class LayoutEditDialog(QDialog):
+    def __init__(self, parent, layout, windows, checked_keys):
+        super().__init__(parent)
+        self.setWindowTitle(f"Edit - {layout.get('name', 'Layout')}")
+        self.resize(1180, 680)
+        self._layout = layout
+        self._windows = [copy.deepcopy(item) for item in windows]
+        self._checkboxes = []
+        self._spin_rows = []
+        self._syncing = False
+        checked_keys = set(checked_keys or [])
+
+        outer = QVBoxLayout(self)
+        title = QLabel(layout.get("name", "Untitled Layout"))
+        title.setProperty("role", "heading")
+        subtitle = QLabel("Toggle windows and adjust saved position/size. The preview updates live; changes save only when you click Save Changes.")
+        subtitle.setProperty("role", "caption")
+        subtitle.setWordWrap(True)
+        outer.addWidget(title)
+        outer.addWidget(subtitle)
+
+        splitter = QSplitter(Qt.Horizontal)
+        editor_group = QGroupBox("Windows")
+        editor_layout = QVBoxLayout(editor_group)
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(["Use", "App", "Window", "X", "Y", "W", "H"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        for col in (3, 4, 5, 6):
+            self.table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        editor_layout.addWidget(self.table)
+
+        preview_group = QGroupBox("Live Preview")
+        preview_layout = QVBoxLayout(preview_group)
+        self.preview = LayoutPreviewCanvas(self._draft_layout())
+        preview_layout.addWidget(self.preview)
+
+        splitter.addWidget(editor_group)
+        splitter.addWidget(preview_group)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        outer.addWidget(splitter, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Save).setText("Save Changes")
+        buttons.accepted.connect(self._accept_if_valid)
+        buttons.rejected.connect(self.reject)
+        outer.addWidget(buttons)
+
+        self._render(checked_keys)
+        self._refresh_preview()
+
+    def _render(self, checked_keys):
+        self.table.setRowCount(len(self._windows))
+        for row, item in enumerate(self._windows):
+            checkbox = QCheckBox()
+            checkbox.setChecked(window_layouts.layout_item_key(item) in checked_keys)
+            checkbox.stateChanged.connect(lambda _state: self._refresh_preview())
+            cell = QWidget()
+            cell_layout = QHBoxLayout(cell)
+            cell_layout.addWidget(checkbox)
+            cell_layout.setAlignment(Qt.AlignCenter)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            self.table.setCellWidget(row, 0, cell)
+            self._checkboxes.append(checkbox)
+
+            self.table.setItem(row, 1, QTableWidgetItem(item.get("process_name") or item.get("exe_path") or "Unknown app"))
+            self.table.setItem(row, 2, QTableWidgetItem(item.get("title") or "Untitled window"))
+
+            rect = item.get("window_rect")
+            if not window_layouts.is_rect(rect):
+                rect = item.get("monitor_rect") or window_layouts.PREVIEW_FALLBACK_MONITOR
+                item["window_rect"] = dict(rect)
+            spin_row = []
+            values = [
+                int(rect.get("left", 0)),
+                int(rect.get("top", 0)),
+                window_layouts.rect_width(rect),
+                window_layouts.rect_height(rect),
+            ]
+            for col, value in zip((3, 4, 5, 6), values):
+                spin = QSpinBox()
+                spin.setRange(-50000, 50000)
+                if col in (5, 6):
+                    spin.setMinimum(1)
+                spin.setValue(value)
+                spin.valueChanged.connect(lambda _value, r=row: self._on_geometry_changed(r))
+                self.table.setCellWidget(row, col, spin)
+                spin_row.append(spin)
+            self._spin_rows.append(spin_row)
+        self.table.resizeRowsToContents()
+
+    def _on_geometry_changed(self, row):
+        if self._syncing or row < 0 or row >= len(self._windows):
+            return
+        x_spin, y_spin, w_spin, h_spin = self._spin_rows[row]
+        rect = {
+            "left": x_spin.value(),
+            "top": y_spin.value(),
+            "right": x_spin.value() + w_spin.value(),
+            "bottom": y_spin.value() + h_spin.value(),
+        }
+        self._windows[row] = window_layouts.update_layout_item_rect(self._windows[row], rect)
+        self._refresh_preview()
+
+    def _selected_windows(self):
+        return [item for item, checkbox in zip(self._windows, self._checkboxes) if checkbox.isChecked()]
+
+    def _draft_layout(self):
+        draft = dict(self._layout)
+        draft["windows"] = self._selected_windows()
+        return draft
+
+    def _refresh_preview(self):
+        self.preview.set_layout(self._draft_layout())
+
+    def _accept_if_valid(self):
+        if not self._selected_windows():
+            QMessageBox.information(self, "Nothing Selected", "A layout needs at least one window.")
+            return
+        self.accept()
+
+    def edited_layout(self):
+        return window_layouts.build_layout(
+            self._layout.get("name", "Untitled Layout"),
+            self._selected_windows(),
+            layout_id=self._layout.get("id"),
+            created_at=self._layout.get("created_at"),
+        )
 
 
 class LayoutsTab(QWidget):
@@ -430,29 +571,18 @@ class LayoutsTab(QWidget):
         if not all_items:
             QMessageBox.information(self, "No Windows Available", "No saved or open windows are available to edit.")
             return
-        dialog = WindowSelectionDialog(
+        dialog = LayoutEditDialog(
             self,
-            "Edit Layout",
-            "Toggle windows for this layout. Saved windows are checked; currently open extra windows are available too.",
+            layout,
             all_items,
             checked_keys,
         )
         if dialog.exec() != QDialog.Accepted:
             self.status_label.setText("Layout edit was canceled.")
             return
-        selected = dialog.selected_windows()
-        if not selected:
-            QMessageBox.information(self, "Nothing Selected", "A layout needs at least one window.")
-            self.status_label.setText("Layout was not changed.")
-            return
-        updated = window_layouts.build_layout(
-            layout.get("name", "Untitled Layout"),
-            selected,
-            layout_id=layout.get("id"),
-            created_at=layout.get("created_at"),
-        )
+        updated = dialog.edited_layout()
         self._layouts[index] = updated
-        self._save_and_render(f"Updated \"{updated.get('name')}\" with {len(selected)} window(s).")
+        self._save_and_render(f"Updated \"{updated.get('name')}\" with {len(updated.get('windows', []))} window(s).")
 
     def confirm_and_apply(self):
         layout = self._selected_layout()

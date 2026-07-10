@@ -136,6 +136,20 @@ def relative_to_rect(relative_rect, monitor_rect):
     return {"left": left, "top": top, "right": left + width, "bottom": top + height}
 
 
+def update_layout_item_rect(item, window_rect):
+    updated = dict(item)
+    updated["window_rect"] = {
+        "left": int(window_rect["left"]),
+        "top": int(window_rect["top"]),
+        "right": int(window_rect["right"]),
+        "bottom": int(window_rect["bottom"]),
+    }
+    monitor_rect = updated.get("monitor_rect")
+    if is_rect(monitor_rect):
+        updated["relative_rect"] = rect_to_relative(updated["window_rect"], monitor_rect)
+    return updated
+
+
 def saved_monitor_rects_for_layout(layout):
     monitors = []
     seen = set()
@@ -379,6 +393,14 @@ def layout_item_key(item):
     )
 
 
+def layout_item_identity_key(item):
+    return (
+        normalize_exe_path(item.get("exe_path")),
+        str(item.get("title") or "").strip().lower(),
+        str(item.get("monitor_device") or "").strip().lower(),
+    )
+
+
 def collect_current_window_items():
     monitors = get_monitor_layouts()
     windows = []
@@ -398,7 +420,7 @@ def merge_layout_items(saved_items, current_items):
     merged = []
     seen = set()
     for item in list(saved_items or []) + list(current_items or []):
-        key = layout_item_key(item)
+        key = layout_item_identity_key(item)
         if key in seen:
             continue
         seen.add(key)

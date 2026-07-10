@@ -104,7 +104,12 @@ def test_merge_layout_items_keeps_saved_first_and_dedupes():
         "window_rect": {"left": 0, "top": 0, "right": 800, "bottom": 600},
     }]
     current = [
-        dict(saved[0]),
+        {
+            "exe_path": r"C:\Apps\editor.exe",
+            "title": "Project Notes",
+            "monitor_device": r"\\.\DISPLAY1",
+            "window_rect": {"left": 20, "top": 20, "right": 900, "bottom": 650},
+        },
         {
             "exe_path": r"C:\Apps\browser.exe",
             "title": "Docs",
@@ -205,3 +210,21 @@ def test_preview_scene_handles_missing_monitor_data():
     assert len(scene["monitors"]) == 1
     assert len(scene["windows"]) == 1
     assert scene["desktop_rect"] == {"left": 20, "top": 30, "right": 420, "bottom": 330}
+
+
+def test_update_layout_item_rect_refreshes_relative_rect():
+    item = {
+        "title": "Editor",
+        "monitor_rect": {"left": 0, "top": 0, "right": 1000, "bottom": 500},
+        "window_rect": {"left": 0, "top": 0, "right": 100, "bottom": 100},
+        "relative_rect": {"x": 0, "y": 0, "width": 0.1, "height": 0.2},
+    }
+
+    updated = window_layouts.update_layout_item_rect(
+        item,
+        {"left": 100, "top": 50, "right": 600, "bottom": 300},
+    )
+
+    assert updated["window_rect"] == {"left": 100, "top": 50, "right": 600, "bottom": 300}
+    assert updated["relative_rect"] == {"x": 0.1, "y": 0.1, "width": 0.5, "height": 0.5}
+    assert item["window_rect"] == {"left": 0, "top": 0, "right": 100, "bottom": 100}

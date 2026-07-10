@@ -4,7 +4,6 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QL
 
 from app.theme import DARK_STYLESHEET
 from app.dashboard_tab import DashboardTab
-from app.cleanup_tab import CleanupTab
 
 
 # Heavy tabs are created on first visit to keep startup responsive.
@@ -14,6 +13,8 @@ _LAZY_TABS = {
     3: ("app.audio_tab", "AudioTab", "Audio"),
     4: ("app.layouts_tab", "LayoutsTab", "Layouts"),
     5: ("app.startup_tab", "StartupTab", "Startup & Programs"),
+    6: ("app.assistant_tab", "AssistantTab", "Assistant"),
+    7: ("app.cleanup_tab", "CleanupTab", "Cleanup"),
 }
 
 
@@ -40,9 +41,10 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(_placeholder("Loading Audio..."), "Audio")
         self.tabs.addTab(_placeholder("Loading Layouts..."), "Layouts")
         self.tabs.addTab(_placeholder("Loading Startup & Programs..."), "Startup & Programs")
-        self.tabs.addTab(CleanupTab(), "Cleanup")
+        self.tabs.addTab(_placeholder("Loading Assistant..."), "Assistant")
+        self.tabs.addTab(_placeholder("Loading Cleanup..."), "Cleanup")
 
-        self._loaded_tabs = {0, 6}  # Dashboard and Cleanup are eager
+        self._loaded_tabs = {0}  # Dashboard is eager
         self.tabs.currentChanged.connect(self._ensure_tab_loaded)
         self.setCentralWidget(self.tabs)
 

@@ -11,8 +11,9 @@ from app.cleanup_tab import CleanupTab
 _LAZY_TABS = {
     1: ("app.hardware_tab", "HardwareTab", "PC Setup"),
     2: ("app.display_tab", "DisplayTab", "Display"),
-    3: ("app.layouts_tab", "LayoutsTab", "Layouts"),
-    4: ("app.startup_tab", "StartupTab", "Startup & Programs"),
+    3: ("app.audio_tab", "AudioTab", "Audio"),
+    4: ("app.layouts_tab", "LayoutsTab", "Layouts"),
+    5: ("app.startup_tab", "StartupTab", "Startup & Programs"),
 }
 
 
@@ -36,11 +37,12 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(DashboardTab(), "Dashboard")
         self.tabs.addTab(_placeholder("Loading PC Setup..."), "PC Setup")
         self.tabs.addTab(_placeholder("Loading Display..."), "Display")
+        self.tabs.addTab(_placeholder("Loading Audio..."), "Audio")
         self.tabs.addTab(_placeholder("Loading Layouts..."), "Layouts")
         self.tabs.addTab(_placeholder("Loading Startup & Programs..."), "Startup & Programs")
         self.tabs.addTab(CleanupTab(), "Cleanup")
 
-        self._loaded_tabs = {0, 5}  # Dashboard and Cleanup are eager
+        self._loaded_tabs = {0, 6}  # Dashboard and Cleanup are eager
         self.tabs.currentChanged.connect(self._ensure_tab_loaded)
         self.setCentralWidget(self.tabs)
 

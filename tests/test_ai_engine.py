@@ -30,9 +30,12 @@ def test_resolve_model_path_uses_project_models_dir():
 def test_format_chat_prompt_uses_llama32_template():
     prompt = format_chat_prompt("System text", "User text")
     assert prompt == (
-        "<|system|>\nSystem text<|end|>\n"
-        "<|user|>\nUser text<|end|>\n"
-        "<|assistant|>\n"
+        "<|begin_of_text|>"
+        "<|start_header_id|>system<|end_header_id|>\n\n"
+        "System text<|eot_id|>"
+        "<|start_header_id|>user<|end_header_id|>\n\n"
+        "User text<|eot_id|>"
+        "<|start_header_id|>assistant<|end_header_id|>\n\n"
     )
 
 
@@ -99,7 +102,7 @@ def test_embedded_ai_query_returns_trimmed_text(tmp_path):
     call_kwargs = mock_llm.call_args.kwargs
     assert call_kwargs["max_tokens"] == 256
     assert call_kwargs["temperature"] == 0.3
-    assert call_kwargs["stop"] == ["<|end|>", "\n\n"]
+    assert call_kwargs["stop"] == ["<|eot_id|>"]
 
 
 def test_embedded_ai_stream_query_yields_tokens(tmp_path):

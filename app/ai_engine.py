@@ -4,7 +4,8 @@ from pathlib import Path
 
 from app import system_info as sysinfo
 
-DEFAULT_MODEL_FILENAME = "llama-3.2-1b-instruct-q4_k_m.gguf"
+DEFAULT_MODEL_FILENAME = "llama-3.2-3b-instruct-q4_k_m.gguf"
+DEFAULT_STOP_TOKENS = ["<|eot_id|>"]
 DEFAULT_SYSTEM_PROMPT = (
     "You are a Windows PC diagnostician inside the PC Fix app. "
     "Use the system snapshot provided with each question. "
@@ -42,10 +43,14 @@ def missing_model_message(path=None):
 
 
 def format_chat_prompt(system_prompt, user_prompt):
+    """Format a prompt using the Llama 3.2 Instruct chat template."""
     return (
-        f"<|system|>\n{system_prompt}<|end|>\n"
-        f"<|user|>\n{user_prompt}<|end|>\n"
-        f"<|assistant|>\n"
+        "<|begin_of_text|>"
+        "<|start_header_id|>system<|end_header_id|>\n\n"
+        f"{system_prompt}<|eot_id|>"
+        "<|start_header_id|>user<|end_header_id|>\n\n"
+        f"{user_prompt}<|eot_id|>"
+        "<|start_header_id|>assistant<|end_header_id|>\n\n"
     )
 
 
@@ -122,7 +127,7 @@ class EmbeddedAI:
     def __init__(
         self,
         model_path=None,
-        n_ctx=1024,
+        n_ctx=2048,
         n_threads=None,
     ):
         self.model_path = Path(model_path or resolve_model_path())
@@ -173,7 +178,7 @@ class EmbeddedAI:
             prompt,
             max_tokens=max_tokens,
             temperature=temperature,
-            stop=stop or ["<|end|>", "\n\n"],
+            stop=stop or DEFAULT_STOP_TOKENS,
         )
         return output["choices"][0]["text"].strip()
 
@@ -191,7 +196,7 @@ class EmbeddedAI:
             prompt,
             max_tokens=max_tokens,
             temperature=temperature,
-            stop=stop or ["<|end|>", "\n\n"],
+            stop=stop or DEFAULT_STOP_TOKENS,
             stream=True,
         )
         for chunk in stream:

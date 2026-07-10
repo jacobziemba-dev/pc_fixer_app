@@ -1,10 +1,20 @@
 import os
+import time
 from pathlib import Path
+
+from app import system_info as sysinfo
 
 DEFAULT_MODEL_FILENAME = "llama-3.2-1b-instruct-q4_k_m.gguf"
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a helpful Windows PC assistant inside the PC Fix app. Answer concisely."
+    "You are a Windows PC diagnostician inside the PC Fix app. "
+    "Use the system snapshot provided with each question. "
+    "Answer in 2-4 short sentences with practical advice. "
+    "Do not invent hardware details that are not in the snapshot."
 )
+HEALTH_CHECK_PROMPT = (
+    "Summarize my PC health and suggest the top 1-2 things I should check."
+)
+SNAPSHOT_UNAVAILABLE = "(system snapshot unavailable)"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = PROJECT_ROOT / "models"
 
@@ -37,6 +47,75 @@ def format_chat_prompt(system_prompt, user_prompt):
         f"<|user|>\n{user_prompt}<|end|>\n"
         f"<|assistant|>\n"
     )
+
+
+def compose_user_prompt(user_text, context=None):
+    if not context:
+        return user_text
+    return f"System snapshot:\n{context}\n\nUser question: {user_text}"
+
+
+def build_system_context():
+    """Build a compact live PC snapshot for the assistant prompt."""
+    lines = []
+
+    try:
+        sysinfo.prime_process_cpu_percent()
+        time.sleep(0.2)
+    except Exception:
+        pass
+
+    try:
+        cpu = sysinfo.get_cpu_stats()
+        lines.append(f"CPU: {cpu['percent']:.0f}%")
+    except Exception:
+        lines.append("CPU: unavailable")
+
+    try:
+        mem = sysinfo.get_memory_stats()
+        lines.append(
+            f"RAM: {sysinfo.format_bytes(mem['used'])} / "
+            f"{sysinfo.format_bytes(mem['total'])} ({mem['percent']:.0f}%)"
+        )
+    except Exception:
+        lines.append("RAM: unavailable")
+
+    try:
+        drives = sysinfo.get_disk_usage()[:3]
+        if drives:
+            for drive in drives:
+                lines.append(
+                    f"Disk {drive['mountpoint']}: "
+                    f"{sysinfo.format_bytes(drive['free'])} free of "
+                    f"{sysinfo.format_bytes(drive['total'])} "
+                    f"({drive['percent']:.0f}% used)"
+                )
+        else:
+            lines.append("Disk: unavailable")
+    except Exception:
+        lines.append("Disk: unavailable")
+
+    try:
+        procs = sysinfo.get_top_processes(limit=5, sort_by="cpu")
+        if procs:
+            lines.append("Top processes (by CPU):")
+            for proc in procs:
+                lines.append(
+                    f"- {proc['name']}: {proc['cpu']:.1f}% CPU, "
+                    f"{sysinfo.format_bytes(proc['mem'])}"
+                )
+        else:
+            lines.append("Processes: unavailable")
+    except Exception:
+        lines.append("Processes: unavailable")
+
+    useful = [
+        line for line in lines
+        if not line.endswith(": unavailable") and line != "Top processes (by CPU):"
+    ]
+    if not useful:
+        return SNAPSHOT_UNAVAILABLE
+    return "\n".join(lines)
 
 
 class EmbeddedAI:

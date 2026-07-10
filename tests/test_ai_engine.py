@@ -11,6 +11,9 @@ from app.ai_engine import (
     DEFAULT_MODEL_FILENAME,
     EmbeddedAI,
     MODELS_DIR,
+    SNAPSHOT_UNAVAILABLE,
+    build_system_context,
+    compose_user_prompt,
     format_chat_prompt,
     missing_model_message,
     model_exists,
@@ -131,3 +134,85 @@ def test_embedded_ai_load_is_idempotent(tmp_path):
         engine.load()
 
     mock_llama_cls.assert_called_once()
+
+
+def _mock_sysinfo_happy():
+    return {
+        "prime_process_cpu_percent": MagicMock(),
+        "get_cpu_stats": MagicMock(return_value={"percent": 34.2, "per_core": [], "freq_mhz": None}),
+        "get_memory_stats": MagicMock(return_value={
+            "total": 32 * 1024**3,
+            "used": 12.1 * 1024**3,
+            "available": 19.9 * 1024**3,
+            "percent": 38.0,
+        }),
+        "get_disk_usage": MagicMock(return_value=[{
+            "device": "C:",
+            "mountpoint": "C:\\",
+            "fstype": "NTFS",
+            "total": 512 * 1024**3,
+            "used": 332 * 1024**3,
+            "free": 180 * 1024**3,
+            "percent": 65.0,
+        }]),
+        "get_top_processes": MagicMock(return_value=[
+            {"pid": 1, "name": "chrome.exe", "cpu": 12.4, "mem": 1.2 * 1024**3},
+            {"pid": 2, "name": "code.exe", "cpu": 8.1, "mem": 800 * 1024**2},
+        ]),
+        "format_bytes": MagicMock(side_effect=lambda n: f"{n / 1024**3:.1f} GB"),
+    }
+
+
+def test_compose_user_prompt_with_context():
+    result = compose_user_prompt("Why is it slow?", "CPU: 90%")
+    assert "System snapshot:" in result
+    assert "CPU: 90%" in result
+    assert "User question: Why is it slow?" in result
+
+
+def test_compose_user_prompt_without_context():
+    assert compose_user_prompt("Hello") == "Hello"
+    assert compose_user_prompt("Hello", None) == "Hello"
+    assert compose_user_prompt("Hello", "") == "Hello"
+
+
+def test_build_system_context_happy_path():
+    mocks = _mock_sysinfo_happy()
+    with patch("app.ai_engine.time.sleep") as sleep_mock, \
+         patch.multiple("app.ai_engine.sysinfo", **mocks):
+        context = build_system_context()
+
+    sleep_mock.assert_called_once_with(0.2)
+    mocks["prime_process_cpu_percent"].assert_called_once()
+    assert "CPU: 34%" in context
+    assert "RAM:" in context
+    assert "38%" in context
+    assert "Disk C:\\:" in context
+    assert "chrome.exe" in context
+    assert "code.exe" in context
+
+
+def test_build_system_context_partial_failure():
+    mocks = _mock_sysinfo_happy()
+    mocks["get_disk_usage"] = MagicMock(side_effect=RuntimeError("disk boom"))
+    with patch("app.ai_engine.time.sleep"), \
+         patch.multiple("app.ai_engine.sysinfo", **mocks):
+        context = build_system_context()
+
+    assert "CPU: 34%" in context
+    assert "RAM:" in context
+    assert "chrome.exe" in context
+    assert "Disk: unavailable" in context
+
+
+def test_build_system_context_total_failure():
+    failing = MagicMock(side_effect=RuntimeError("boom"))
+    with patch("app.ai_engine.time.sleep"), \
+         patch("app.ai_engine.sysinfo.prime_process_cpu_percent", failing), \
+         patch("app.ai_engine.sysinfo.get_cpu_stats", failing), \
+         patch("app.ai_engine.sysinfo.get_memory_stats", failing), \
+         patch("app.ai_engine.sysinfo.get_disk_usage", failing), \
+         patch("app.ai_engine.sysinfo.get_top_processes", failing):
+        context = build_system_context()
+
+    assert context == SNAPSHOT_UNAVAILABLE

@@ -1,5 +1,5 @@
 from PySide6.QtCore import QThread, Signal
-from PySide6.QtGui import QShowEvent, QTextCursor
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTextEdit, QLineEdit,
@@ -9,6 +9,9 @@ from app.ai_engine import (
     AIEngineError,
     DEFAULT_SYSTEM_PROMPT,
     EmbeddedAI,
+    HEALTH_CHECK_PROMPT,
+    build_system_context,
+    compose_user_prompt,
     missing_model_message,
     model_exists,
     resolve_model_path,
@@ -46,9 +49,11 @@ class InferenceWorker(QThread):
 
     def run(self):
         try:
+            context = build_system_context()
+            prompt = compose_user_prompt(self._user_prompt, context)
             for token in self._engine.stream_query(
                 self._system_prompt,
-                self._user_prompt,
+                prompt,
             ):
                 self.token_received.emit(token)
             self.inference_complete.emit()
@@ -101,6 +106,12 @@ class AssistantTab(QWidget):
         self.input_field.setEnabled(False)
         input_layout.addWidget(self.input_field)
 
+        self.health_btn = QPushButton("How's my PC?")
+        self.health_btn.setProperty("variant", "secondary")
+        self.health_btn.clicked.connect(self._on_health_check)
+        self.health_btn.setEnabled(False)
+        input_layout.addWidget(self.health_btn)
+
         self.send_btn = QPushButton("Send")
         self.send_btn.clicked.connect(self._send_message)
         self.send_btn.setEnabled(False)
@@ -122,6 +133,7 @@ class AssistantTab(QWidget):
 
     def _set_input_enabled(self, enabled):
         self.input_field.setEnabled(enabled)
+        self.health_btn.setEnabled(enabled)
         self.send_btn.setEnabled(enabled)
 
     def _worker_is_running(self, worker):
@@ -178,23 +190,28 @@ class AssistantTab(QWidget):
         scrollbar.setValue(scrollbar.maximum())
 
     def _send_message(self):
+        user_text = self.input_field.text().strip()
+        if not user_text:
+            return
+        self.input_field.clear()
+        self._start_inference(user_text)
+
+    def _on_health_check(self):
+        self._start_inference(HEALTH_CHECK_PROMPT)
+
+    def _start_inference(self, display_text):
         if not self._model_ready:
             return
         if self._worker_is_running(self._infer_worker):
             return
 
-        user_text = self.input_field.text().strip()
-        if not user_text:
-            return
-
-        self.input_field.clear()
-        self._append_transcript_line(f"You: {user_text}")
+        self._append_transcript_line(f"You: {display_text}")
         self._assistant_buffer = ""
         self._append_transcript_line("Assistant: ")
         self._set_input_enabled(False)
         self._set_status("Thinking...")
 
-        self._infer_worker = InferenceWorker(self._engine, user_text)
+        self._infer_worker = InferenceWorker(self._engine, display_text)
         self._infer_worker.token_received.connect(self._on_token_received)
         self._infer_worker.inference_complete.connect(self._on_inference_finished)
         self._infer_worker.error.connect(self._on_inference_error)

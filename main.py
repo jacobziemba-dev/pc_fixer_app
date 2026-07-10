@@ -6,6 +6,7 @@ from app.theme import DARK_STYLESHEET
 from app.dashboard_tab import DashboardTab
 from app.hardware_tab import HardwareTab
 from app.display_tab import DisplayTab
+from app.layouts_tab import LayoutsTab
 from app.startup_tab import StartupTab
 from app.cleanup_tab import CleanupTab
 
@@ -20,6 +21,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(DashboardTab(), "Dashboard")
         tabs.addTab(HardwareTab(), "PC Setup")
         tabs.addTab(DisplayTab(), "Display")
+        tabs.addTab(LayoutsTab(), "Layouts")
         tabs.addTab(StartupTab(), "Startup & Programs")
         tabs.addTab(CleanupTab(), "Cleanup")
         self.setCentralWidget(tabs)

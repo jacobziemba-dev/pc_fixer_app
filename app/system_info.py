@@ -11,6 +11,8 @@ import winreg
 from dataclasses import dataclass, field
 
 import psutil
+import win32api
+import win32con
 
 SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "scripts")
 
@@ -184,6 +186,222 @@ def get_hardware_info():
         "physical_cores": psutil.cpu_count(logical=False),
         "boot_time": psutil.boot_time(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Display devices and refresh-rate changes
+# ---------------------------------------------------------------------------
+
+DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x00000001
+DISPLAY_DEVICE_PRIMARY_DEVICE = 0x00000004
+
+
+@dataclass
+class DisplayDevice:
+    name: str
+    label: str
+    adapter_label: str = ""
+    monitor_device_name: str = ""
+    device_id: str = ""
+    device_key: str = ""
+    is_primary: bool = False
+
+
+@dataclass
+class DisplayMode:
+    width: int
+    height: int
+    bit_depth: int
+    refresh_hz: int
+
+
+@dataclass
+class DisplayChangeResult:
+    success: bool
+    code: int
+    message: str
+    requires_restart: bool = False
+
+
+def _display_mode_from_devmode(devmode):
+    return DisplayMode(
+        width=int(devmode.PelsWidth),
+        height=int(devmode.PelsHeight),
+        bit_depth=int(devmode.BitsPerPel),
+        refresh_hz=int(devmode.DisplayFrequency),
+    )
+
+
+def _monitor_name_from_edid(edid):
+    if not edid or len(edid) < 128:
+        return ""
+    for offset in range(54, 126, 18):
+        descriptor = edid[offset:offset + 18]
+        if len(descriptor) < 18:
+            continue
+        if descriptor[0:3] == b"\x00\x00\x00" and descriptor[3] == 0xFC:
+            raw_name = descriptor[5:18].split(b"\x0A", 1)[0]
+            return raw_name.decode("ascii", errors="ignore").strip(" \t\r\n\x00")
+    return ""
+
+
+def _monitor_hardware_id(device_id):
+    parts = str(device_id or "").split("\\")
+    if len(parts) >= 2 and parts[0].upper() == "MONITOR":
+        return parts[1]
+    return ""
+
+
+def _monitor_name_from_registry(device_id):
+    hardware_id = _monitor_hardware_id(device_id)
+    if not hardware_id:
+        return ""
+    base_path = rf"SYSTEM\CurrentControlSet\Enum\DISPLAY\{hardware_id}"
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base_path, 0, winreg.KEY_READ) as base:
+            index = 0
+            while True:
+                try:
+                    instance_name = winreg.EnumKey(base, index)
+                except OSError:
+                    break
+                index += 1
+                params_path = rf"{base_path}\{instance_name}\Device Parameters"
+                try:
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, params_path, 0, winreg.KEY_READ) as params:
+                        edid = winreg.QueryValueEx(params, "EDID")[0]
+                except OSError:
+                    continue
+                monitor_name = _monitor_name_from_edid(edid)
+                if monitor_name:
+                    return monitor_name
+    except OSError:
+        return ""
+    return ""
+
+
+def _monitor_for_adapter(adapter_name):
+    index = 0
+    while True:
+        try:
+            monitor = win32api.EnumDisplayDevices(adapter_name, index)
+        except Exception:
+            break
+        index += 1
+        if monitor.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP:
+            return monitor
+    return None
+
+
+def _result_message(code):
+    messages = {
+        win32con.DISP_CHANGE_SUCCESSFUL: "Refresh rate changed successfully.",
+        win32con.DISP_CHANGE_RESTART: "Refresh rate was accepted, but Windows requires a restart.",
+        win32con.DISP_CHANGE_FAILED: "Windows or the display driver refused the change.",
+        win32con.DISP_CHANGE_BADMODE: "That refresh rate is not supported for the current display mode.",
+        win32con.DISP_CHANGE_NOTUPDATED: "Windows could not save the display settings.",
+        win32con.DISP_CHANGE_BADFLAGS: "The display change request used invalid flags.",
+        win32con.DISP_CHANGE_BADPARAM: "The display change request used invalid parameters.",
+        win32con.DISP_CHANGE_BADDUALVIEW: "The display change is not supported while DualView is enabled.",
+    }
+    return messages.get(code, f"Windows returned display change code {code}.")
+
+
+def _supported_refresh_rates_for_modes(current_mode, modes):
+    rates = {
+        int(mode.refresh_hz)
+        for mode in modes
+        if int(mode.width) == int(current_mode.width)
+        and int(mode.height) == int(current_mode.height)
+        and int(mode.bit_depth) == int(current_mode.bit_depth)
+        and int(mode.refresh_hz) > 1
+    }
+    if int(current_mode.refresh_hz) > 1:
+        rates.add(int(current_mode.refresh_hz))
+    return sorted(rates)
+
+
+def get_display_devices():
+    devices = []
+    index = 0
+    while True:
+        try:
+            device = win32api.EnumDisplayDevices(None, index)
+        except Exception:
+            break
+        index += 1
+        if not (device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP):
+            continue
+        monitor = _monitor_for_adapter(device.DeviceName)
+        monitor_name = ""
+        monitor_device_name = ""
+        monitor_device_id = ""
+        if monitor:
+            monitor_device_name = monitor.DeviceName
+            monitor_device_id = monitor.DeviceID
+            monitor_name = _monitor_name_from_registry(monitor.DeviceID) or monitor.DeviceString
+        devices.append(DisplayDevice(
+            name=device.DeviceName,
+            label=monitor_name or device.DeviceString or device.DeviceName,
+            adapter_label=device.DeviceString or "",
+            monitor_device_name=monitor_device_name,
+            device_id=monitor_device_id or device.DeviceID,
+            device_key=device.DeviceKey,
+            is_primary=bool(device.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE),
+        ))
+    devices.sort(key=lambda d: (not d.is_primary, d.label.lower()))
+    return devices
+
+
+def get_current_display_mode(device_name):
+    devmode = win32api.EnumDisplaySettings(device_name, win32con.ENUM_CURRENT_SETTINGS)
+    return _display_mode_from_devmode(devmode)
+
+
+def _get_display_modes(device_name):
+    modes = []
+    index = 0
+    while True:
+        try:
+            devmode = win32api.EnumDisplaySettings(device_name, index)
+        except Exception:
+            break
+        modes.append(_display_mode_from_devmode(devmode))
+        index += 1
+    return modes
+
+
+def get_supported_refresh_rates(device_name):
+    current = get_current_display_mode(device_name)
+    return _supported_refresh_rates_for_modes(current, _get_display_modes(device_name))
+
+
+def set_display_refresh_rate(device_name, hz):
+    current_devmode = win32api.EnumDisplaySettings(device_name, win32con.ENUM_CURRENT_SETTINGS)
+    current_devmode.DisplayFrequency = int(hz)
+    current_devmode.Fields = (
+        win32con.DM_PELSWIDTH
+        | win32con.DM_PELSHEIGHT
+        | win32con.DM_BITSPERPEL
+        | win32con.DM_DISPLAYFREQUENCY
+    )
+
+    test_code = win32api.ChangeDisplaySettingsEx(device_name, current_devmode, win32con.CDS_TEST)
+    if test_code != win32con.DISP_CHANGE_SUCCESSFUL:
+        return DisplayChangeResult(
+            success=False,
+            code=test_code,
+            message=_result_message(test_code),
+            requires_restart=(test_code == win32con.DISP_CHANGE_RESTART),
+        )
+
+    apply_code = win32api.ChangeDisplaySettingsEx(device_name, current_devmode, win32con.CDS_UPDATEREGISTRY)
+    return DisplayChangeResult(
+        success=apply_code in (win32con.DISP_CHANGE_SUCCESSFUL, win32con.DISP_CHANGE_RESTART),
+        code=apply_code,
+        message=_result_message(apply_code),
+        requires_restart=(apply_code == win32con.DISP_CHANGE_RESTART),
+    )
 
 
 # ---------------------------------------------------------------------------

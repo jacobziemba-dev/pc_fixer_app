@@ -127,6 +127,22 @@ QScrollArea {
 QCheckBox {
     spacing: 8px;
 }
+QComboBox {
+    background-color: #2b2c35;
+    color: #ffffff;
+    border: 1px solid #33343d;
+    border-radius: 6px;
+    padding: 7px 10px;
+}
+QComboBox:disabled {
+    color: #6b6c78;
+}
+QComboBox QAbstractItemView {
+    background-color: #24252d;
+    color: #ffffff;
+    selection-background-color: #3d4a7a;
+    border: 1px solid #33343d;
+}
 QSplitter::handle {
     background-color: #33343d;
 }

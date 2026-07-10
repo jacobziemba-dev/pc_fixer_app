@@ -14,10 +14,12 @@ from app.ai_engine import (
     SNAPSHOT_UNAVAILABLE,
     build_system_context,
     compose_user_prompt,
+    format_chat_history,
     format_chat_prompt,
     missing_model_message,
     model_exists,
     resolve_model_path,
+    trim_chat_history,
 )
 
 
@@ -158,10 +160,14 @@ def _mock_sysinfo_happy():
             "free": 180 * 1024**3,
             "percent": 65.0,
         }]),
+        "get_startup_items": MagicMock(return_value=[
+            {"name": "OneDrive", "command": "onedrive.exe", "source": "HKCU\\...\\Run"},
+        ]),
         "get_top_processes": MagicMock(return_value=[
             {"pid": 1, "name": "chrome.exe", "cpu": 12.4, "mem": 1.2 * 1024**3},
             {"pid": 2, "name": "code.exe", "cpu": 8.1, "mem": 800 * 1024**2},
         ]),
+        "get_display_devices": MagicMock(return_value=[]),
         "format_bytes": MagicMock(side_effect=lambda n: f"{n / 1024**3:.1f} GB"),
     }
 
@@ -179,6 +185,33 @@ def test_compose_user_prompt_without_context():
     assert compose_user_prompt("Hello", "") == "Hello"
 
 
+def test_trim_chat_history_keeps_newest_turns():
+    history = [{"user": f"u{i}", "assistant": f"a{i}"} for i in range(10)]
+    trimmed = trim_chat_history(history, max_turns=3)
+
+    assert trimmed == history[-3:]
+
+
+def test_format_chat_history_uses_user_and_assistant_lines():
+    history = [{"user": "What is high?", "assistant": "CPU is high."}]
+
+    result = format_chat_history(history)
+
+    assert "User: What is high?" in result
+    assert "Assistant: CPU is high." in result
+
+
+def test_compose_user_prompt_with_history():
+    history = [{"user": "What is high?", "assistant": "CPU is high."}]
+
+    result = compose_user_prompt("What next?", "CPU: 90%", history)
+
+    assert "System snapshot:" in result
+    assert "Recent conversation:" in result
+    assert "Assistant: CPU is high." in result
+    assert "User question: What next?" in result
+
+
 def test_build_system_context_happy_path():
     mocks = _mock_sysinfo_happy()
     with patch("app.ai_engine.time.sleep") as sleep_mock, \
@@ -191,6 +224,7 @@ def test_build_system_context_happy_path():
     assert "RAM:" in context
     assert "38%" in context
     assert "Disk C:\\:" in context
+    assert "Startup apps: 1 detected" in context
     assert "chrome.exe" in context
     assert "code.exe" in context
 
@@ -215,7 +249,9 @@ def test_build_system_context_total_failure():
          patch("app.ai_engine.sysinfo.get_cpu_stats", failing), \
          patch("app.ai_engine.sysinfo.get_memory_stats", failing), \
          patch("app.ai_engine.sysinfo.get_disk_usage", failing), \
-         patch("app.ai_engine.sysinfo.get_top_processes", failing):
+         patch("app.ai_engine.sysinfo.get_startup_items", failing), \
+         patch("app.ai_engine.sysinfo.get_top_processes", failing), \
+         patch("app.ai_engine.sysinfo.get_display_devices", failing):
         context = build_system_context()
 
     assert context == SNAPSHOT_UNAVAILABLE

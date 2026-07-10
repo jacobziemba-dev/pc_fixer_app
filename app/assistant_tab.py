@@ -7,9 +7,13 @@ from PySide6.QtWidgets import (
 
 from app.ai_engine import (
     AIEngineError,
+    CLEANUP_REVIEW_PROMPT,
     DEFAULT_SYSTEM_PROMPT,
+    DISK_SPACE_PROMPT,
     EmbeddedAI,
     HEALTH_CHECK_PROMPT,
+    SLOW_PC_PROMPT,
+    STARTUP_REVIEW_PROMPT,
     build_system_context,
     compose_user_prompt,
     missing_model_message,
@@ -36,21 +40,39 @@ class ModelLoadWorker(QThread):
             self.error.emit(f"Failed to load model: {exc}")
 
 
+QUICK_ACTIONS = [
+    ("How's my PC?", HEALTH_CHECK_PROMPT, False),
+    ("Why is it slow?", SLOW_PC_PROMPT, False),
+    ("Check disk space", DISK_SPACE_PROMPT, False),
+    ("Startup review", STARTUP_REVIEW_PROMPT, False),
+    ("Safe cleanup", CLEANUP_REVIEW_PROMPT, True),
+]
+
+
 class InferenceWorker(QThread):
     token_received = Signal(str)
     inference_complete = Signal()
     error = Signal(str)
 
-    def __init__(self, engine, user_prompt, system_prompt=DEFAULT_SYSTEM_PROMPT):
+    def __init__(
+        self,
+        engine,
+        user_prompt,
+        history=None,
+        include_cleanup=False,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+    ):
         super().__init__()
         self._engine = engine
         self._user_prompt = user_prompt
+        self._history = history or []
+        self._include_cleanup = include_cleanup
         self._system_prompt = system_prompt
 
     def run(self):
         try:
-            context = build_system_context()
-            prompt = compose_user_prompt(self._user_prompt, context)
+            context = build_system_context(include_cleanup=self._include_cleanup)
+            prompt = compose_user_prompt(self._user_prompt, context, self._history)
             for token in self._engine.stream_query(
                 self._system_prompt,
                 prompt,
@@ -72,6 +94,8 @@ class AssistantTab(QWidget):
         self._model_ready = False
         self._load_started = False
         self._assistant_buffer = ""
+        self._history = []
+        self._pending_user_text = ""
 
         outer = QVBoxLayout(self)
 
@@ -83,6 +107,10 @@ class AssistantTab(QWidget):
         self.status_label = QLabel("Checking model...")
         self.status_label.setProperty("role", "caption")
         header_layout.addWidget(self.status_label)
+        self.recheck_btn = QPushButton("Recheck Model")
+        self.recheck_btn.setProperty("variant", "secondary")
+        self.recheck_btn.clicked.connect(self._recheck_model)
+        header_layout.addWidget(self.recheck_btn)
         outer.addLayout(header_layout)
 
         subtitle = QLabel(
@@ -99,18 +127,31 @@ class AssistantTab(QWidget):
         self.transcript.setPlaceholderText("Ask a question about your PC...")
         outer.addWidget(self.transcript)
 
+        quick_layout = QHBoxLayout()
+        self.quick_buttons = []
+        for label, prompt, include_cleanup in QUICK_ACTIONS:
+            button = QPushButton(label)
+            button.setProperty("variant", "secondary")
+            button.clicked.connect(
+                lambda checked=False, label=label, prompt=prompt, include_cleanup=include_cleanup:
+                    self._start_inference(label, prompt, include_cleanup)
+            )
+            button.setEnabled(False)
+            quick_layout.addWidget(button)
+            self.quick_buttons.append(button)
+        quick_layout.addStretch(1)
+        self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setProperty("variant", "secondary")
+        self.clear_btn.clicked.connect(self._clear_chat)
+        quick_layout.addWidget(self.clear_btn)
+        outer.addLayout(quick_layout)
+
         input_layout = QHBoxLayout()
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Type a message and press Enter...")
         self.input_field.returnPressed.connect(self._send_message)
         self.input_field.setEnabled(False)
         input_layout.addWidget(self.input_field)
-
-        self.health_btn = QPushButton("How's my PC?")
-        self.health_btn.setProperty("variant", "secondary")
-        self.health_btn.clicked.connect(self._on_health_check)
-        self.health_btn.setEnabled(False)
-        input_layout.addWidget(self.health_btn)
 
         self.send_btn = QPushButton("Send")
         self.send_btn.clicked.connect(self._send_message)
@@ -133,7 +174,8 @@ class AssistantTab(QWidget):
 
     def _set_input_enabled(self, enabled):
         self.input_field.setEnabled(enabled)
-        self.health_btn.setEnabled(enabled)
+        for button in self.quick_buttons:
+            button.setEnabled(enabled)
         self.send_btn.setEnabled(enabled)
 
     def _worker_is_running(self, worker):
@@ -189,17 +231,40 @@ class AssistantTab(QWidget):
         scrollbar = self.transcript.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
+    def _clear_chat(self):
+        self.transcript.clear()
+        self._history = []
+        self._assistant_buffer = ""
+        self._pending_user_text = ""
+
     def _send_message(self):
         user_text = self.input_field.text().strip()
         if not user_text:
             return
         self.input_field.clear()
-        self._start_inference(user_text)
+        self._start_inference(user_text, user_text, self._should_include_cleanup(user_text))
 
-    def _on_health_check(self):
-        self._start_inference(HEALTH_CHECK_PROMPT)
+    def _should_include_cleanup(self, text):
+        lowered = text.lower()
+        return any(word in lowered for word in ("clean", "cleanup", "delete temp", "free space"))
 
-    def _start_inference(self, display_text):
+    def _recheck_model(self):
+        if self._worker_is_running(self._load_worker) or self._worker_is_running(self._infer_worker):
+            return
+        if not model_exists():
+            self._model_ready = False
+            self._load_started = False
+            self._set_status(missing_model_message(resolve_model_path()))
+            self._set_input_enabled(False)
+            return
+        if self._engine.is_loaded:
+            self._model_ready = True
+            self._set_status("Ready")
+            self._set_input_enabled(True)
+            return
+        self._start_model_load()
+
+    def _start_inference(self, display_text, prompt_text=None, include_cleanup=False):
         if not self._model_ready:
             return
         if self._worker_is_running(self._infer_worker):
@@ -207,11 +272,17 @@ class AssistantTab(QWidget):
 
         self._append_transcript_line(f"You: {display_text}")
         self._assistant_buffer = ""
+        self._pending_user_text = display_text
         self._append_transcript_line("Assistant: ")
         self._set_input_enabled(False)
         self._set_status("Thinking...")
 
-        self._infer_worker = InferenceWorker(self._engine, display_text)
+        self._infer_worker = InferenceWorker(
+            self._engine,
+            prompt_text or display_text,
+            history=list(self._history),
+            include_cleanup=include_cleanup,
+        )
         self._infer_worker.token_received.connect(self._on_token_received)
         self._infer_worker.inference_complete.connect(self._on_inference_finished)
         self._infer_worker.error.connect(self._on_inference_error)
@@ -224,6 +295,14 @@ class AssistantTab(QWidget):
         self._append_transcript_token(token)
 
     def _on_inference_finished(self):
+        answer = self._assistant_buffer.strip()
+        if self._pending_user_text and answer:
+            self._history.append({
+                "user": self._pending_user_text,
+                "assistant": answer,
+            })
+            self._history = self._history[-8:]
+        self._pending_user_text = ""
         self._set_status("Ready")
         self._set_input_enabled(True)
         self.input_field.setFocus()
@@ -233,5 +312,6 @@ class AssistantTab(QWidget):
             self._append_transcript_token(f"[Error: {message}]")
         else:
             self._append_transcript_token(f"\n[Error: {message}]")
+        self._pending_user_text = ""
         self._set_status(message)
         self._set_input_enabled(True)

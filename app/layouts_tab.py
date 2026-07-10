@@ -91,7 +91,7 @@ class LayoutPreviewCanvas(QWidget):
 
 
 class LayoutsTab(QWidget):
-    REFRESH_INTERVAL_MS = 1500
+    REFRESH_INTERVAL_MS = 5000
 
     def __init__(self):
         super().__init__()
@@ -169,6 +169,14 @@ class LayoutsTab(QWidget):
         self.layouts_table.itemSelectionChanged.connect(self._on_layout_selected)
         layouts_layout.addWidget(self.layouts_table)
 
+        layout_actions = QHBoxLayout()
+        self.delete_layout_btn = QPushButton("Delete")
+        self.delete_layout_btn.setProperty("variant", "danger")
+        self.delete_layout_btn.clicked.connect(self.delete_selected_layout)
+        layout_actions.addStretch(1)
+        layout_actions.addWidget(self.delete_layout_btn)
+        layouts_layout.addLayout(layout_actions)
+
         windows_group = QGroupBox("Layout Windows")
         windows_layout = QVBoxLayout(windows_group)
         self.windows_table = QTableWidget(0, 4)
@@ -201,6 +209,7 @@ class LayoutsTab(QWidget):
         self._current_displays = []
         self._removed_current_keys = set()
         self._visible_current_items = []
+        self._current_signature = None
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(self.REFRESH_INTERVAL_MS)
@@ -231,7 +240,11 @@ class LayoutsTab(QWidget):
         self._start_scan("refresh")
 
     def save_current_layout(self):
+        was_refreshing = self._refresh_timer.isActive()
+        self._refresh_timer.stop()
         name, ok = QInputDialog.getText(self, "Save Current Layout", "Layout name:")
+        if was_refreshing:
+            self._refresh_timer.start()
         name = name.strip()
         if not ok or not name:
             return
@@ -263,6 +276,34 @@ class LayoutsTab(QWidget):
         self._refresh_current_preview()
         self.status_label.setText("Restored all open apps to the current layout draft.")
 
+    def delete_selected_layout(self):
+        index = self._selected_layout_index()
+        layout = self._selected_layout()
+        if index < 0 or not layout:
+            return
+        name = layout.get("name", "this layout")
+        was_refreshing = self._refresh_timer.isActive()
+        self._refresh_timer.stop()
+        reply = QMessageBox.question(
+            self,
+            "Delete Layout",
+            f"Delete \"{name}\"?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if was_refreshing:
+            self._refresh_timer.start()
+        if reply != QMessageBox.Yes:
+            return
+        del self._layouts[index]
+        window_layouts.save_layouts(self._layouts)
+        next_id = ""
+        if self._layouts:
+            next_index = min(index, len(self._layouts) - 1)
+            next_id = self._layouts[next_index].get("id", "")
+        self._render_layouts(select_id=next_id)
+        self.status_label.setText(f"Deleted \"{name}\".")
+
     def _start_scan(self, purpose):
         if self._scan_worker and self._scan_worker.isRunning():
             return
@@ -286,12 +327,16 @@ class LayoutsTab(QWidget):
             self._start_queued_save_if_needed()
             return
 
+        signature = self._scan_signature(items, displays)
+        changed = signature != self._current_signature
+        self._current_signature = signature
         self._current_items = items
         self._current_displays = displays
         self._removed_current_keys.intersection_update(
             self._current_item_key(item) for item in items
         )
-        self._refresh_current_preview()
+        if purpose == "save" or changed:
+            self._refresh_current_preview()
 
         if purpose == "save":
             self._save_scanned_layout(self._included_current_items(), displays)
@@ -364,6 +409,7 @@ class LayoutsTab(QWidget):
 
     def _on_layout_selected(self):
         self._render_windows(self._selected_layout())
+        self.delete_layout_btn.setEnabled(self._selected_layout() is not None)
 
     def _render_windows(self, layout):
         windows = layout.get("windows", []) if layout else []
@@ -397,9 +443,38 @@ class LayoutsTab(QWidget):
     def _current_item_key(self, item):
         return window_layouts.layout_item_key(item)
 
+    def _scan_signature(self, items, displays):
+        display_key = tuple(
+            (
+                display.get("device", ""),
+                self._rect_key(display.get("monitor_rect")),
+                self._rect_key(display.get("work_rect")),
+            )
+            for display in displays
+        )
+        item_key = tuple(
+            (
+                self._current_item_key(item),
+                item.get("process_name", ""),
+            )
+            for item in items
+        )
+        return display_key, item_key
+
+    def _rect_key(self, rect):
+        if not window_layouts.is_rect(rect):
+            return None
+        return (
+            int(rect["left"]),
+            int(rect["top"]),
+            int(rect["right"]),
+            int(rect["bottom"]),
+        )
+
     def _render_current_apps(self, items):
         selected_key, selected_identity = self._selected_current_app_keys()
         self._visible_current_items = list(items)
+        self.current_apps_table.blockSignals(True)
         self.current_apps_table.setRowCount(len(items))
         selected_row = -1
         for row, item in enumerate(items):
@@ -423,6 +498,7 @@ class LayoutsTab(QWidget):
             self.current_apps_table.selectRow(selected_row)
         else:
             self.current_apps_table.clearSelection()
+        self.current_apps_table.blockSignals(False)
         self.current_apps_table.resizeRowsToContents()
         self._update_current_app_actions()
 
@@ -443,6 +519,7 @@ class LayoutsTab(QWidget):
 
     def _set_busy(self, busy):
         self.save_btn.setEnabled(not busy)
+        self.delete_layout_btn.setEnabled(not busy and self._selected_layout() is not None)
         if busy:
             self.remove_app_btn.setEnabled(False)
         else:

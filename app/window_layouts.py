@@ -170,6 +170,7 @@ def saved_monitor_rects_for_layout(layout):
         display_monitors.append({
             "device": display.get("device", "") or f"Display {len(display_monitors) + 1}",
             "rect": monitor_rect,
+            "is_primary": bool(display.get("is_primary")),
         })
     if display_monitors:
         return display_monitors
@@ -193,12 +194,15 @@ def saved_monitor_rects_for_layout(layout):
         monitors.append({
             "device": item.get("monitor_device", "") or f"Display {len(monitors) + 1}",
             "rect": monitor_rect,
+            "is_primary": False,
         })
     if monitors:
         return monitors
+    if not layout.get("windows"):
+        return []
     return [{"device": "Saved Display", "rect": union_rect(
         item.get("window_rect") for item in layout.get("windows", [])
-    )}]
+    ), "is_primary": False}]
 
 
 def _preview_rect(rect, desktop_rect, scale, offset_x, offset_y):
@@ -208,6 +212,10 @@ def _preview_rect(rect, desktop_rect, scale, offset_x, offset_y):
         "width": max(int(round(rect_width(rect) * scale)), 1),
         "height": max(int(round(rect_height(rect) * scale)), 1),
     }
+
+
+def _display_resolution_label(rect):
+    return f"{rect_width(rect)} x {rect_height(rect)}" if is_rect(rect) else ""
 
 
 def build_preview_scene(layout, canvas_width, canvas_height, padding=24):
@@ -223,14 +231,17 @@ def build_preview_scene(layout, canvas_width, canvas_height, padding=24):
     content_height = rect_height(desktop_rect) * scale
     offset_x = int(round((int(canvas_width) - content_width) / 2))
     offset_y = int(round((int(canvas_height) - content_height) / 2))
-    scene_monitors = [
-        {
+    scene_monitors = []
+    for index, monitor in enumerate(monitors, start=1):
+        scene_monitors.append({
+            "index": index,
+            "label": f"Display {index}",
             "device": monitor["device"],
+            "is_primary": bool(monitor.get("is_primary")),
+            "resolution": _display_resolution_label(monitor["rect"]),
             "rect": monitor["rect"],
             "preview_rect": _preview_rect(monitor["rect"], desktop_rect, scale, offset_x, offset_y),
-        }
-        for monitor in monitors
-    ]
+        })
     scene_windows = []
     for item in layout.get("windows", []):
         window_rect = item.get("window_rect")

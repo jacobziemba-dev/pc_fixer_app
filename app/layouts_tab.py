@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from PySide6.QtCore import QTimer, QThread, Signal, Qt
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QInputDialog,
@@ -29,12 +29,18 @@ class LayoutScanWorker(QThread):
 
 class LayoutPreviewCanvas(QWidget):
     WINDOW_COLORS = [
-        QColor(109, 141, 255, 160),
-        QColor(72, 190, 145, 155),
-        QColor(245, 166, 35, 150),
-        QColor(239, 83, 80, 145),
-        QColor(166, 120, 255, 150),
+        QColor("#5c7cfa"),
+        QColor("#2fb380"),
+        QColor("#d9902f"),
+        QColor("#d95c5c"),
+        QColor("#8b6fe8"),
     ]
+    CANVAS_COLOR = QColor("#22242b")
+    MONITOR_COLOR = QColor("#292c35")
+    MONITOR_BORDER = QColor("#454a58")
+    MONITOR_TEXT = QColor("#f2f4fb")
+    MUTED_TEXT = QColor("#a6a9b8")
+    WINDOW_TEXT = QColor("#ffffff")
 
     def __init__(self, layout=None):
         super().__init__()
@@ -49,45 +55,115 @@ class LayoutPreviewCanvas(QWidget):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#1e1f26"))
+        painter.fillRect(self.rect(), self.CANVAS_COLOR)
 
         scene = window_layouts.build_preview_scene(self._layout, self.width(), self.height(), 32)
         if not scene["monitors"]:
-            painter.setPen(QColor("#9294a3"))
-            painter.drawText(self.rect(), Qt.AlignCenter, "No connected displays found.")
+            self._draw_center_message(painter, "No connected displays found.")
             return
 
-        painter.setPen(QPen(QColor("#33343d"), 1))
-        painter.setBrush(QColor("#24252d"))
         for monitor in scene["monitors"]:
-            rect = monitor["preview_rect"]
-            painter.drawRoundedRect(rect["x"], rect["y"], rect["width"], rect["height"], 8, 8)
-            painter.setPen(QColor("#b7b8c2"))
-            painter.drawText(rect["x"] + 10, rect["y"] + 22, monitor["device"])
-            painter.setPen(QPen(QColor("#33343d"), 1))
+            self._draw_monitor(painter, monitor)
+
+        if not scene["windows"]:
+            self._draw_center_message(painter, "No app windows selected for this layout.")
+            return
 
         metrics = QFontMetrics(painter.font())
         for index, window in enumerate(scene["windows"]):
-            rect = window["preview_rect"]
-            color = self.WINDOW_COLORS[index % len(self.WINDOW_COLORS)]
-            painter.setBrush(color)
-            painter.setPen(QPen(QColor("#d8ddff"), 1))
-            painter.drawRoundedRect(rect["x"], rect["y"], rect["width"], rect["height"], 5, 5)
+            self._draw_window(painter, metrics, window, index)
 
-            label = window["app"]
-            if rect["width"] > 150 and rect["height"] > 42:
-                label = window["label"]
-            text_width = max(rect["width"] - 12, 10)
-            text = metrics.elidedText(label, Qt.ElideRight, text_width)
-            painter.setPen(QColor("#ffffff"))
+    def _draw_center_message(self, painter, message):
+        painter.save()
+        font = painter.font()
+        font.setWeight(QFont.DemiBold)
+        painter.setFont(font)
+        painter.setPen(self.MUTED_TEXT)
+        painter.drawText(self.rect(), Qt.AlignCenter, message)
+        painter.restore()
+
+    def _draw_monitor(self, painter, monitor):
+        painter.save()
+        rect = monitor["preview_rect"]
+        x = rect["x"]
+        y = rect["y"]
+        width = rect["width"]
+        height = rect["height"]
+        painter.setBrush(self.MONITOR_COLOR)
+        painter.setPen(QPen(self.MONITOR_BORDER, 1))
+        painter.drawRoundedRect(x, y, width, height, 8, 8)
+
+        if width < 80 or height < 42:
+            painter.restore()
+            return
+
+        title_font = painter.font()
+        title_font.setWeight(QFont.DemiBold)
+        painter.setFont(title_font)
+        title_metrics = QFontMetrics(title_font)
+        painter.setPen(self.MONITOR_TEXT)
+        label = title_metrics.elidedText(monitor.get("label", "Display"), Qt.ElideRight, max(width - 24, 10))
+        painter.drawText(x + 12, y + 22, label)
+
+        detail_font = painter.font()
+        detail_font.setWeight(QFont.Normal)
+        detail_font.setPointSize(max(detail_font.pointSize() - 1, 8))
+        painter.setFont(detail_font)
+        detail_metrics = QFontMetrics(detail_font)
+        details = []
+        if monitor.get("resolution"):
+            details.append(monitor["resolution"])
+        if monitor.get("device"):
+            details.append(monitor["device"])
+        if monitor.get("is_primary"):
+            details.append("Primary")
+        detail_text = " - ".join(details)
+        if detail_text and height > 58:
+            detail_text = detail_metrics.elidedText(detail_text, Qt.ElideRight, max(width - 24, 10))
+            painter.setPen(self.MUTED_TEXT)
+            painter.drawText(x + 12, y + 40, detail_text)
+        painter.restore()
+
+    def _draw_window(self, painter, metrics, window, index):
+        painter.save()
+        rect = window["preview_rect"]
+        x = rect["x"]
+        y = rect["y"]
+        width = rect["width"]
+        height = rect["height"]
+        if width <= 0 or height <= 0:
+            painter.restore()
+            return
+
+        color = self.WINDOW_COLORS[index % len(self.WINDOW_COLORS)]
+        title_bar = min(max(height // 5, 16), 24)
+        painter.setBrush(color)
+        painter.setPen(QPen(QColor("#e4e8ff"), 1))
+        painter.drawRoundedRect(x, y, width, height, 5, 5)
+        painter.fillRect(x + 1, y + 1, max(width - 2, 1), max(min(title_bar, height - 2), 1), QColor(0, 0, 0, 54))
+
+        if width < 38 or height < 24:
+            painter.restore()
+            return
+
+        text_x = x + 7
+        text_width = max(width - 14, 10)
+        app_text = metrics.elidedText(window.get("app") or "App", Qt.ElideRight, text_width)
+        painter.setPen(self.WINDOW_TEXT)
+        painter.drawText(text_x, y + 4, text_width, title_bar, Qt.AlignLeft | Qt.AlignVCenter, app_text)
+
+        if width > 130 and height > 52:
+            label = metrics.elidedText(window.get("label") or "", Qt.ElideRight, text_width)
+            painter.setPen(QColor("#eef1ff"))
             painter.drawText(
-                rect["x"] + 6,
-                rect["y"] + 6,
+                text_x,
+                y + title_bar + 6,
                 text_width,
-                max(rect["height"] - 12, 12),
+                max(height - title_bar - 12, 12),
                 Qt.AlignLeft | Qt.AlignTop,
-                text,
+                label,
             )
+        painter.restore()
 
 
 class LayoutsTab(QWidget):

@@ -248,6 +248,40 @@ def test_preview_scene_uses_saved_displays_even_without_windows():
     assert scene["monitors"][1]["preview_rect"]["x"] == 1920
 
 
+def test_preview_scene_adds_display_metadata():
+    layout = {
+        "displays": [
+            {
+                "device": r"\\.\DISPLAY1",
+                "is_primary": True,
+                "monitor_rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
+            },
+            {
+                "device": r"\\.\DISPLAY2",
+                "is_primary": False,
+                "monitor_rect": {"left": 1920, "top": 0, "right": 4480, "bottom": 1440},
+            },
+        ],
+        "windows": [],
+    }
+
+    scene = window_layouts.build_preview_scene(layout, 4480, 1440, padding=0)
+
+    assert [monitor["label"] for monitor in scene["monitors"]] == ["Display 1", "Display 2"]
+    assert [monitor["index"] for monitor in scene["monitors"]] == [1, 2]
+    assert scene["monitors"][0]["resolution"] == "1920 x 1080"
+    assert scene["monitors"][1]["resolution"] == "2560 x 1440"
+    assert scene["monitors"][0]["is_primary"] is True
+    assert scene["monitors"][1]["is_primary"] is False
+
+
+def test_preview_scene_has_no_monitors_for_empty_layout():
+    scene = window_layouts.build_preview_scene({"displays": [], "windows": []}, 800, 600)
+
+    assert scene["monitors"] == []
+    assert scene["windows"] == []
+
+
 def test_build_layout_derives_displays_from_windows_for_legacy_callers():
     layout = window_layouts.build_layout(
         "Legacy",

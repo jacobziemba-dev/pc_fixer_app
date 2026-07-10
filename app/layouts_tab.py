@@ -118,16 +118,18 @@ class LayoutsTab(QWidget):
 
         apps_group = QGroupBox("Current Apps")
         apps_layout = QVBoxLayout(apps_group)
-        self.current_apps_table = QTableWidget(0, 3)
-        self.current_apps_table.setHorizontalHeaderLabels(["App", "Window", "Display"])
+        self.current_apps_table = QTableWidget(0, 4)
+        self.current_apps_table.setHorizontalHeaderLabels(["App", "Window", "Display", "Position"])
         self.current_apps_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.current_apps_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.current_apps_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.current_apps_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.current_apps_table.verticalHeader().setVisible(False)
         self.current_apps_table.setAlternatingRowColors(True)
         self.current_apps_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.current_apps_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.current_apps_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.current_apps_table.itemSelectionChanged.connect(self._update_current_app_actions)
         apps_layout.addWidget(self.current_apps_table)
 
         app_actions = QHBoxLayout()
@@ -248,7 +250,7 @@ class LayoutsTab(QWidget):
         if row < 0 or row >= len(self._visible_current_items):
             return
         item = self._visible_current_items[row]
-        self._removed_current_keys.add(self._current_item_identity(item))
+        self._removed_current_keys.add(self._current_item_key(item))
         self._refresh_current_preview()
         self.status_label.setText(
             f"Removed \"{window_layouts.saved_window_label(item)}\" from the current layout draft."
@@ -287,7 +289,7 @@ class LayoutsTab(QWidget):
         self._current_items = items
         self._current_displays = displays
         self._removed_current_keys.intersection_update(
-            self._current_item_identity(item) for item in items
+            self._current_item_key(item) for item in items
         )
         self._refresh_current_preview()
 
@@ -385,30 +387,63 @@ class LayoutsTab(QWidget):
         included = self._included_current_items()
         self.preview.set_layout({"displays": self._current_displays, "windows": included})
         self._render_current_apps(included)
-        self.remove_app_btn.setEnabled(bool(included))
-        self.show_all_btn.setEnabled(bool(self._removed_current_keys))
 
     def _included_current_items(self):
         return [
             item for item in self._current_items
-            if self._current_item_identity(item) not in self._removed_current_keys
+            if self._current_item_key(item) not in self._removed_current_keys
         ]
 
-    def _current_item_identity(self, item):
-        return window_layouts.layout_item_identity_key(item)
+    def _current_item_key(self, item):
+        return window_layouts.layout_item_key(item)
 
     def _render_current_apps(self, items):
+        selected_key, selected_identity = self._selected_current_app_keys()
         self._visible_current_items = list(items)
         self.current_apps_table.setRowCount(len(items))
+        selected_row = -1
         for row, item in enumerate(items):
             app_name = item.get("process_name") or item.get("exe_path") or "Unknown app"
             title = item.get("title") or "Untitled window"
+            rect = item.get("window_rect", {})
+            position = (
+                f"{rect.get('left', '?')}, {rect.get('top', '?')} - "
+                f"{window_layouts.rect_width(rect)} x {window_layouts.rect_height(rect)}"
+                if window_layouts.is_rect(rect) else ""
+            )
             self.current_apps_table.setItem(row, 0, QTableWidgetItem(app_name))
             self.current_apps_table.setItem(row, 1, QTableWidgetItem(title))
             self.current_apps_table.setItem(row, 2, QTableWidgetItem(item.get("monitor_device", "")))
-        if items:
-            self.current_apps_table.selectRow(0)
+            self.current_apps_table.setItem(row, 3, QTableWidgetItem(position))
+            if self._current_item_key(item) == selected_key:
+                selected_row = row
+            elif selected_row < 0 and window_layouts.layout_item_identity_key(item) == selected_identity:
+                selected_row = row
+        if selected_row >= 0:
+            self.current_apps_table.selectRow(selected_row)
+        else:
+            self.current_apps_table.clearSelection()
         self.current_apps_table.resizeRowsToContents()
+        self._update_current_app_actions()
+
+    def _selected_current_app_keys(self):
+        selected = self.current_apps_table.selectionModel().selectedRows()
+        if not selected:
+            return None, None
+        row = selected[0].row()
+        if row < 0 or row >= len(self._visible_current_items):
+            return None, None
+        item = self._visible_current_items[row]
+        return self._current_item_key(item), window_layouts.layout_item_identity_key(item)
+
+    def _update_current_app_actions(self):
+        has_selection = bool(self.current_apps_table.selectionModel().selectedRows())
+        self.remove_app_btn.setEnabled(has_selection)
+        self.show_all_btn.setEnabled(bool(self._removed_current_keys))
 
     def _set_busy(self, busy):
         self.save_btn.setEnabled(not busy)
+        if busy:
+            self.remove_app_btn.setEnabled(False)
+        else:
+            self._update_current_app_actions()

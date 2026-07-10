@@ -6,6 +6,7 @@ import sys
 
 import pytest
 
+from app.assistant_core import AssistantTurn
 from app.ai_engine import (
     AIEngineError,
     DEFAULT_MODEL_FILENAME,
@@ -193,7 +194,7 @@ def test_trim_chat_history_keeps_newest_turns():
 
 
 def test_format_chat_history_uses_user_and_assistant_lines():
-    history = [{"user": "What is high?", "assistant": "CPU is high."}]
+    history = [AssistantTurn("What is high?", "CPU is high.", MagicMock())]
 
     result = format_chat_history(history)
 
@@ -202,7 +203,7 @@ def test_format_chat_history_uses_user_and_assistant_lines():
 
 
 def test_compose_user_prompt_with_history():
-    history = [{"user": "What is high?", "assistant": "CPU is high."}]
+    history = [AssistantTurn("What is high?", "CPU is high.", MagicMock())]
 
     result = compose_user_prompt("What next?", "CPU: 90%", history)
 
@@ -215,7 +216,7 @@ def test_compose_user_prompt_with_history():
 def test_build_system_context_happy_path():
     mocks = _mock_sysinfo_happy()
     with patch("app.ai_engine.time.sleep") as sleep_mock, \
-         patch.multiple("app.ai_engine.sysinfo", **mocks):
+         patch.multiple("app.assistant_core.sysinfo", **mocks):
         context = build_system_context()
 
     sleep_mock.assert_called_once_with(0.2)
@@ -233,7 +234,7 @@ def test_build_system_context_partial_failure():
     mocks = _mock_sysinfo_happy()
     mocks["get_disk_usage"] = MagicMock(side_effect=RuntimeError("disk boom"))
     with patch("app.ai_engine.time.sleep"), \
-         patch.multiple("app.ai_engine.sysinfo", **mocks):
+         patch.multiple("app.assistant_core.sysinfo", **mocks):
         context = build_system_context()
 
     assert "CPU: 34%" in context
@@ -245,13 +246,13 @@ def test_build_system_context_partial_failure():
 def test_build_system_context_total_failure():
     failing = MagicMock(side_effect=RuntimeError("boom"))
     with patch("app.ai_engine.time.sleep"), \
-         patch("app.ai_engine.sysinfo.prime_process_cpu_percent", failing), \
-         patch("app.ai_engine.sysinfo.get_cpu_stats", failing), \
-         patch("app.ai_engine.sysinfo.get_memory_stats", failing), \
-         patch("app.ai_engine.sysinfo.get_disk_usage", failing), \
-         patch("app.ai_engine.sysinfo.get_startup_items", failing), \
-         patch("app.ai_engine.sysinfo.get_top_processes", failing), \
-         patch("app.ai_engine.sysinfo.get_display_devices", failing):
+         patch("app.assistant_core.sysinfo.prime_process_cpu_percent", failing), \
+         patch("app.assistant_core.sysinfo.get_cpu_stats", failing), \
+         patch("app.assistant_core.sysinfo.get_memory_stats", failing), \
+         patch("app.assistant_core.sysinfo.get_disk_usage", failing), \
+         patch("app.assistant_core.sysinfo.get_startup_items", failing), \
+         patch("app.assistant_core.sysinfo.get_top_processes", failing), \
+         patch("app.assistant_core.sysinfo.get_display_devices", failing):
         context = build_system_context()
 
     assert context == SNAPSHOT_UNAVAILABLE

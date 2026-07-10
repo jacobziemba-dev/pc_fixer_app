@@ -51,18 +51,41 @@ class MainWindow(QMainWindow):
     def _ensure_tab_loaded(self, index):
         if index in self._loaded_tabs or index not in _LAZY_TABS:
             return
+        self._load_tab(index, make_current=True)
 
+    def _load_tab(self, index, make_current=False):
+        if index in self._loaded_tabs or index not in _LAZY_TABS:
+            return self.tabs.widget(index)
         module_name, class_name, title = _LAZY_TABS[index]
         module = __import__(module_name, fromlist=[class_name])
         tab_cls = getattr(module, class_name)
         real_tab = tab_cls()
+        if hasattr(real_tab, "action_requested"):
+            real_tab.action_requested.connect(self._on_assistant_action_requested)
 
+        current_widget = self.tabs.currentWidget()
         self.tabs.blockSignals(True)
         self.tabs.removeTab(index)
         self.tabs.insertTab(index, real_tab, title)
-        self.tabs.setCurrentIndex(index)
+        if make_current:
+            self.tabs.setCurrentIndex(index)
+        elif current_widget is not None:
+            self.tabs.setCurrentWidget(current_widget)
         self.tabs.blockSignals(False)
         self._loaded_tabs.add(index)
+        return real_tab
+
+    def _on_assistant_action_requested(self, kind, payload):
+        if kind == "refresh_audio":
+            tab = self._load_tab(3)
+            if hasattr(tab, "load"):
+                tab.load()
+        elif kind == "refresh_layouts":
+            tab = self._load_tab(4)
+            if hasattr(tab, "load"):
+                tab.load()
+            if hasattr(tab, "refresh_current_layout"):
+                tab.refresh_current_layout()
 
 
 def main():

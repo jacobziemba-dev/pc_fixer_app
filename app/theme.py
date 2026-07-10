@@ -59,6 +59,69 @@ QLabel[role="heading"] {
     font-weight: 700;
     color: #ffffff;
 }
+QLabel[role="status-chip"] {
+    color: #d7ddff;
+    background-color: #2b2f3f;
+    border: 1px solid #3a425d;
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 12px;
+}
+QLabel[role="action-title"] {
+    color: #ffffff;
+    font-weight: 700;
+}
+QLabel[role="snapshot-key"] {
+    color: #f0f2fb;
+    font-weight: 600;
+    min-width: 86px;
+}
+QFrame[role="message-user"] {
+    background-color: #334a7d;
+    border: 1px solid #49649c;
+    border-radius: 8px;
+}
+QFrame[role="message-assistant"] {
+    background-color: #252832;
+    border: 1px solid #363b4a;
+    border-radius: 8px;
+}
+QFrame[role="message-system"] {
+    background-color: #26352f;
+    border: 1px solid #3a594b;
+    border-radius: 8px;
+}
+QFrame[role="message-error"] {
+    background-color: #3a2528;
+    border: 1px solid #704045;
+    border-radius: 8px;
+}
+QFrame[role="snapshot-panel"],
+QFrame[role="missing-model"],
+QFrame[role="action-card"] {
+    background-color: #24252d;
+    border: 1px solid #33343d;
+    border-radius: 8px;
+}
+QFrame[role="action-card"] {
+    border-color: #4a5678;
+}
+QScrollArea[role="chat-scroll"] {
+    background-color: #202129;
+    border: 1px solid #33343d;
+    border-radius: 8px;
+}
+QToolButton {
+    background-color: #24252d;
+    color: #ffffff;
+    border: 1px solid #33343d;
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-weight: 600;
+}
+QToolButton:hover {
+    background-color: #2b2c35;
+}
 QProgressBar {
     border: none;
     border-radius: 5px;
@@ -121,8 +184,28 @@ QPushButton[variant="secondary"] {
 QPushButton[variant="secondary"]:hover {
     background-color: #33343d;
 }
+QPushButton[variant="chip"] {
+    background-color: #252a36;
+    border: 1px solid #3b4358;
+    border-radius: 6px;
+    padding: 7px 11px;
+}
+QPushButton[variant="chip"]:hover {
+    background-color: #30384d;
+}
 QScrollArea {
     border: none;
+}
+QLineEdit {
+    background-color: #24252d;
+    color: #ffffff;
+    border: 1px solid #33343d;
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+QLineEdit:disabled {
+    color: #6b6c78;
+    background-color: #202129;
 }
 QCheckBox {
     spacing: 8px;

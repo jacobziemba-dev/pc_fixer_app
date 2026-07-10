@@ -2,7 +2,12 @@ import os
 import time
 from pathlib import Path
 
-from app import system_info as sysinfo
+from app.assistant_core import (
+    AssistantTurn,
+    collect_assistant_snapshot,
+    render_snapshot_context,
+    snapshot_has_useful_data,
+)
 
 DEFAULT_MODEL_FILENAME = "llama-3.2-3b-instruct-q4_k_m.gguf"
 DEFAULT_STOP_TOKENS = ["<|eot_id|>"]
@@ -83,8 +88,12 @@ def format_chat_history(history, max_turns=MAX_HISTORY_TURNS):
 
     lines = []
     for turn in turns:
-        user = str(turn.get("user", "")).strip()
-        assistant = str(turn.get("assistant", "")).strip()
+        if isinstance(turn, AssistantTurn):
+            user = turn.user.strip()
+            assistant = turn.assistant.strip()
+        else:
+            user = str(turn.get("user", "")).strip()
+            assistant = str(turn.get("assistant", "")).strip()
         if not user and not assistant:
             continue
         if user:
@@ -129,130 +138,21 @@ def _append_warnings(lines, cpu_percent=None, memory_percent=None, drives=None):
         lines.extend(f"- {warning}" for warning in warnings)
 
 
-def build_system_context(include_cleanup=False):
-    """Build a compact live PC snapshot for the assistant prompt."""
-    lines = []
-    cpu_percent = None
-    memory_percent = None
-    drives = []
-
+def build_system_snapshot(include_cleanup=False):
+    """Build structured live PC context for the assistant and UI."""
     try:
-        sysinfo.prime_process_cpu_percent()
         time.sleep(0.2)
     except Exception:
         pass
+    return collect_assistant_snapshot(include_cleanup=include_cleanup)
 
-    try:
-        cpu = sysinfo.get_cpu_stats()
-        cpu_percent = cpu["percent"]
-        lines.append(f"CPU: {cpu['percent']:.0f}%")
-        if cpu.get("freq_mhz"):
-            lines.append(f"CPU speed: {cpu['freq_mhz']:.0f} MHz")
-    except Exception:
-        lines.append("CPU: unavailable")
 
-    try:
-        mem = sysinfo.get_memory_stats()
-        memory_percent = mem["percent"]
-        lines.append(
-            f"RAM: {sysinfo.format_bytes(mem['used'])} / "
-            f"{sysinfo.format_bytes(mem['total'])} ({mem['percent']:.0f}%)"
-        )
-    except Exception:
-        lines.append("RAM: unavailable")
-
-    try:
-        drives = sysinfo.get_disk_usage()[:4]
-        if drives:
-            for drive in drives:
-                lines.append(
-                    f"Disk {drive['mountpoint']}: "
-                    f"{sysinfo.format_bytes(drive['free'])} free of "
-                    f"{sysinfo.format_bytes(drive['total'])} "
-                    f"({drive['percent']:.0f}% used)"
-                )
-        else:
-            lines.append("Disk: unavailable")
-    except Exception:
-        lines.append("Disk: unavailable")
-
-    try:
-        startup_items = sysinfo.get_startup_items()
-        lines.append(f"Startup apps: {len(startup_items)} detected")
-        for item in startup_items[:5]:
-            lines.append(f"- Startup: {item['name']} ({item['source']})")
-    except Exception:
-        lines.append("Startup apps: unavailable")
-
-    try:
-        procs = sysinfo.get_top_processes(limit=5, sort_by="cpu")
-        if procs:
-            lines.append("Top processes (by CPU):")
-            for proc in procs:
-                lines.append(
-                    f"- {proc['name']}: {proc['cpu']:.1f}% CPU, "
-                    f"{sysinfo.format_bytes(proc['mem'])}"
-                )
-        else:
-            lines.append("Processes: unavailable")
-    except Exception:
-        lines.append("Processes: unavailable")
-
-    try:
-        mem_procs = sysinfo.get_top_processes(limit=3, sort_by="mem")
-        if mem_procs:
-            lines.append("Top processes (by RAM):")
-            for proc in mem_procs:
-                lines.append(
-                    f"- {proc['name']}: {sysinfo.format_bytes(proc['mem'])}, "
-                    f"{proc['cpu']:.1f}% CPU"
-                )
-    except Exception:
-        lines.append("Memory-heavy processes: unavailable")
-
-    try:
-        displays = sysinfo.get_display_devices()
-        lines.append(f"Displays: {len(displays)} connected")
-        for display in displays[:3]:
-            mode = sysinfo.get_current_display_mode(display.name)
-            primary = "primary" if display.is_primary else "secondary"
-            lines.append(
-                f"- Display: {display.label} ({primary}), "
-                f"{mode.width}x{mode.height} @ {mode.refresh_hz} Hz"
-            )
-    except Exception:
-        lines.append("Displays: unavailable")
-
-    if include_cleanup:
-        try:
-            cleanup_categories = sysinfo.scan_cleanup_targets()
-            total_cleanup = sum(cat.size_bytes for cat in cleanup_categories)
-            lines.append(
-                f"Cleanup candidates: {len(cleanup_categories)} categories, "
-                f"{sysinfo.format_bytes(total_cleanup)} found"
-            )
-            for cat in cleanup_categories[:5]:
-                lines.append(
-                    f"- Cleanup: {cat.label}, {sysinfo.format_bytes(cat.size_bytes)}, "
-                    f"{cat.file_count} files"
-                )
-        except Exception:
-            lines.append("Cleanup candidates: unavailable")
-
-    _append_warnings(lines, cpu_percent, memory_percent, drives)
-
-    useful = [
-        line for line in lines
-        if not line.endswith(": unavailable")
-        and line not in {
-            "Top processes (by CPU):",
-            "Top processes (by RAM):",
-            "Warnings:",
-        }
-    ]
-    if not useful:
+def build_system_context(include_cleanup=False):
+    """Build a compact live PC snapshot for the assistant prompt."""
+    snapshot = build_system_snapshot(include_cleanup=include_cleanup)
+    if not snapshot_has_useful_data(snapshot):
         return SNAPSHOT_UNAVAILABLE
-    return "\n".join(lines)
+    return render_snapshot_context(snapshot)
 
 
 class EmbeddedAI:

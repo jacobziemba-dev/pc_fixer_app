@@ -27,6 +27,21 @@ class LayoutScanWorker(QThread):
             self.finished_with_items.emit([], [], str(exc), self._purpose)
 
 
+class LayoutApplyWorker(QThread):
+    finished_with_result = Signal(object, str)
+
+    def __init__(self, layout):
+        super().__init__()
+        self._layout = layout
+
+    def run(self):
+        try:
+            result = window_layouts.apply_layout(self._layout, launch_missing=True)
+            self.finished_with_result.emit(result, "")
+        except Exception as exc:
+            self.finished_with_result.emit(None, str(exc))
+
+
 class LayoutPreviewCanvas(QWidget):
     WINDOW_COLORS = [
         QColor("#5c7cfa"),
@@ -261,10 +276,13 @@ class LayoutsTab(QWidget):
         layouts_layout.addWidget(self.layouts_table)
 
         layout_actions = QHBoxLayout()
+        self.load_layout_btn = QPushButton("Load Layout")
+        self.load_layout_btn.clicked.connect(self.load_selected_layout)
         self.delete_layout_btn = QPushButton("Delete")
         self.delete_layout_btn.setProperty("variant", "danger")
         self.delete_layout_btn.clicked.connect(self.delete_selected_layout)
         layout_actions.addStretch(1)
+        layout_actions.addWidget(self.load_layout_btn)
         layout_actions.addWidget(self.delete_layout_btn)
         layouts_layout.addLayout(layout_actions)
 
@@ -294,6 +312,7 @@ class LayoutsTab(QWidget):
 
         self._layouts = []
         self._scan_worker = None
+        self._apply_worker = None
         self._queued_save_name = ""
         self._active_save_name = ""
         self._current_items = []
@@ -301,6 +320,7 @@ class LayoutsTab(QWidget):
         self._removed_current_keys = set()
         self._visible_current_items = []
         self._current_signature = None
+        self._resume_refresh_after_apply = False
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(self.REFRESH_INTERVAL_MS)
@@ -367,6 +387,39 @@ class LayoutsTab(QWidget):
         self._refresh_current_preview()
         self.status_label.setText("Restored all open apps to the current layout draft.")
 
+    def load_selected_layout(self):
+        layout = self._selected_layout()
+        if not layout:
+            return
+        if self._scan_worker and self._scan_worker.isRunning():
+            self.status_label.setText("Waiting for the current scan to finish before loading a layout.")
+            return
+        name = layout.get("name", "this layout")
+        window_count = len(layout.get("windows", []))
+        if window_count == 0:
+            QMessageBox.information(
+                self,
+                "No Windows in Layout",
+                f"\"{name}\" does not have any saved windows to load.",
+            )
+            return
+
+        was_refreshing = self._refresh_timer.isActive()
+        self._refresh_timer.stop()
+        reply = QMessageBox.question(
+            self,
+            "Load Layout",
+            f"Load \"{name}\"?\n\nThis will move matching windows and open missing apps when possible.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if was_refreshing:
+            self._refresh_timer.start()
+        if reply != QMessageBox.Yes:
+            return
+
+        self._start_apply_layout(dict(layout))
+
     def delete_selected_layout(self):
         index = self._selected_layout_index()
         layout = self._selected_layout()
@@ -405,6 +458,49 @@ class LayoutsTab(QWidget):
         self._scan_worker.finished_with_items.connect(self._on_scan_finished)
         self._scan_worker.finished.connect(self._scan_worker.deleteLater)
         self._scan_worker.start()
+
+    def _start_apply_layout(self, layout):
+        if self._apply_worker and self._apply_worker.isRunning():
+            return
+        self._resume_refresh_after_apply = self._refresh_timer.isActive()
+        self._refresh_timer.stop()
+        self._set_busy(True)
+        self.status_label.setText(f"Loading \"{layout.get('name', 'selected layout')}\"...")
+        self._apply_worker = LayoutApplyWorker(layout)
+        self._apply_worker.finished_with_result.connect(self._on_layout_applied)
+        self._apply_worker.finished.connect(self._apply_worker.deleteLater)
+        self._apply_worker.start()
+
+    def _on_layout_applied(self, result, error):
+        self._set_busy(False)
+        self._apply_worker = None
+        if self._resume_refresh_after_apply:
+            self._refresh_timer.start()
+        self._resume_refresh_after_apply = False
+        if error:
+            self.status_label.setText("Could not load the selected layout.")
+            QMessageBox.warning(self, "Layout Load Failed", f"Could not load layout:\n\n{error}")
+            return
+        if result is None:
+            self.status_label.setText("Could not load the selected layout.")
+            return
+
+        parts = [f"Moved {result.moved} window(s)"]
+        if result.launched:
+            parts.append(f"launched {len(result.launched)} app(s)")
+        if result.missing:
+            parts.append(f"{len(result.missing)} window(s) missing")
+        if result.errors:
+            parts.append(f"{len(result.errors)} error(s)")
+        self.status_label.setText("Layout loaded: " + ", ".join(parts) + ".")
+        if result.missing or result.errors:
+            details = []
+            if result.missing:
+                details.append("Missing windows:\n" + "\n".join(result.missing[:8]))
+            if result.errors:
+                details.append("Errors:\n" + "\n".join(result.errors[:8]))
+            QMessageBox.warning(self, "Layout Loaded with Issues", "\n\n".join(details))
+        self.refresh_current_layout()
 
     def _on_scan_finished(self, items, displays, error, purpose):
         self._set_busy(False)
@@ -500,7 +596,9 @@ class LayoutsTab(QWidget):
 
     def _on_layout_selected(self):
         self._render_windows(self._selected_layout())
-        self.delete_layout_btn.setEnabled(self._selected_layout() is not None)
+        has_layout = self._selected_layout() is not None
+        self.load_layout_btn.setEnabled(has_layout)
+        self.delete_layout_btn.setEnabled(has_layout)
 
     def _render_windows(self, layout):
         windows = layout.get("windows", []) if layout else []
@@ -611,6 +709,7 @@ class LayoutsTab(QWidget):
 
     def _set_busy(self, busy):
         self.save_btn.setEnabled(not busy)
+        self.load_layout_btn.setEnabled(not busy and self._selected_layout() is not None)
         self.delete_layout_btn.setEnabled(not busy and self._selected_layout() is not None)
         if busy:
             self.remove_app_btn.setEnabled(False)

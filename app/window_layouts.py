@@ -669,6 +669,7 @@ def apply_layout(layout, launch_missing=True):
     moved = 0
     missing = []
     errors = list(launch_errors)
+    matched_windows = []
 
     for saved_window in layout.get("windows", []):
         match = find_best_window(saved_window, candidates, used_hwnds)
@@ -693,7 +694,27 @@ def apply_layout(layout, launch_missing=True):
                 win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
             )
             moved += 1
+            z_order = _int_or_none(saved_window.get("z_order"))
+            matched_windows.append((z_order, len(matched_windows), match["hwnd"]))
         except Exception as exc:
             errors.append(f"{saved_window.get('title', 'Window')}: {exc}")
+
+    for z_order, _index, hwnd in sorted(
+        matched_windows,
+        key=lambda item: (item[0] if item[0] is not None else item[1], item[1]),
+        reverse=True,
+    ):
+        try:
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
+            )
+        except Exception as exc:
+            errors.append(f"Could not restore window layer: {exc}")
 
     return LayoutApplyResult(moved=moved, launched=launched, missing=missing, errors=errors)

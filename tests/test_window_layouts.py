@@ -356,6 +356,59 @@ def test_collect_current_window_items_preserves_z_order(monkeypatch):
     assert [item["z_order"] for item in items] == [0, 1]
 
 
+def test_apply_layout_restores_saved_z_order(monkeypatch):
+    monitor_rect = {"left": 0, "top": 0, "right": 1000, "bottom": 500}
+    layout = {
+        "windows": [
+            {
+                "title": "Top",
+                "exe_path": r"C:\Apps\top.exe",
+                "monitor_device": r"\\.\DISPLAY1",
+                "relative_rect": {"x": 0, "y": 0, "width": 0.3, "height": 0.4},
+                "z_order": 0,
+            },
+            {
+                "title": "Middle",
+                "exe_path": r"C:\Apps\middle.exe",
+                "monitor_device": r"\\.\DISPLAY1",
+                "relative_rect": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.4},
+                "z_order": 1,
+            },
+            {
+                "title": "Bottom",
+                "exe_path": r"C:\Apps\bottom.exe",
+                "monitor_device": r"\\.\DISPLAY1",
+                "relative_rect": {"x": 0.2, "y": 0.2, "width": 0.3, "height": 0.4},
+                "z_order": 2,
+            },
+        ],
+    }
+    candidates = [
+        {"hwnd": 10, "exe_path": r"C:\Apps\top.exe", "title": "Top"},
+        {"hwnd": 20, "exe_path": r"C:\Apps\middle.exe", "title": "Middle"},
+        {"hwnd": 30, "exe_path": r"C:\Apps\bottom.exe", "title": "Bottom"},
+    ]
+    calls = []
+    monkeypatch.setattr(window_layouts, "enumerate_app_windows", lambda: candidates)
+    monkeypatch.setattr(window_layouts, "get_monitor_layouts", lambda: [{
+        "device": r"\\.\DISPLAY1",
+        "is_primary": True,
+        "work_rect": monitor_rect,
+        "monitor_rect": monitor_rect,
+    }])
+    monkeypatch.setattr(window_layouts.win32gui, "IsIconic", lambda _hwnd: False)
+    monkeypatch.setattr(window_layouts.win32gui, "SetWindowPos", lambda *args: calls.append(args))
+
+    result = window_layouts.apply_layout(layout, launch_missing=False)
+
+    assert result.moved == 3
+    restack_calls = [
+        call for call in calls
+        if call[1] == window_layouts.win32con.HWND_TOP
+    ]
+    assert [call[0] for call in restack_calls] == [30, 20, 10]
+
+
 def test_build_layout_derives_displays_from_windows_for_legacy_callers():
     layout = window_layouts.build_layout(
         "Legacy",

@@ -2,25 +2,22 @@ from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QInputDialog,
-    QSplitter, QAbstractItemView,
+    QSplitter, QAbstractItemView, QDialog, QDialogButtonBox, QCheckBox,
+    QScrollArea,
 )
 
 from app import window_layouts
 
 
-class CaptureLayoutWorker(QThread):
-    finished_with_layout = Signal(object, str)
-
-    def __init__(self, name):
-        super().__init__()
-        self._name = name
+class WindowItemsWorker(QThread):
+    finished_with_items = Signal(list, str)
 
     def run(self):
         try:
-            layout = window_layouts.capture_current_layout(self._name)
-            self.finished_with_layout.emit(layout, "")
+            items = window_layouts.collect_current_window_items()
+            self.finished_with_items.emit(items, "")
         except Exception as exc:
-            self.finished_with_layout.emit(None, str(exc))
+            self.finished_with_items.emit([], str(exc))
 
 
 class ApplyLayoutWorker(QThread):
@@ -38,6 +35,91 @@ class ApplyLayoutWorker(QThread):
         self.finished_with_result.emit(result)
 
 
+class WindowSelectionDialog(QDialog):
+    def __init__(self, parent, title, message, windows, checked_keys=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(820, 520)
+        self._windows = windows
+        self._checkboxes = []
+        checked_keys = set(checked_keys or [])
+
+        outer = QVBoxLayout(self)
+        label = QLabel(message)
+        label.setProperty("role", "caption")
+        label.setWordWrap(True)
+        outer.addWidget(label)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Add", "App", "Window", "Display", "Position"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table_layout = QVBoxLayout(inner)
+        table_layout.addWidget(self.table)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, 1)
+
+        actions = QHBoxLayout()
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.setProperty("variant", "secondary")
+        select_all_btn.clicked.connect(lambda: self._set_all_checked(True))
+        select_none_btn = QPushButton("Select None")
+        select_none_btn.setProperty("variant", "secondary")
+        select_none_btn.clicked.connect(lambda: self._set_all_checked(False))
+        actions.addWidget(select_all_btn)
+        actions.addWidget(select_none_btn)
+        actions.addStretch(1)
+        outer.addLayout(actions)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        outer.addWidget(buttons)
+
+        self._render(checked_keys)
+
+    def _render(self, checked_keys):
+        self.table.setRowCount(len(self._windows))
+        for row, item in enumerate(self._windows):
+            checkbox = QCheckBox()
+            checkbox.setChecked(not checked_keys or window_layouts.layout_item_key(item) in checked_keys)
+            cell = QWidget()
+            cell_layout = QHBoxLayout(cell)
+            cell_layout.addWidget(checkbox)
+            cell_layout.setAlignment(Qt.AlignCenter)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            self.table.setCellWidget(row, 0, cell)
+            self._checkboxes.append(checkbox)
+
+            rect = item.get("window_rect", {})
+            position = (
+                f"{rect.get('left', '?')}, {rect.get('top', '?')} - "
+                f"{window_layouts.rect_width(rect)} x {window_layouts.rect_height(rect)}"
+                if rect else ""
+            )
+            self.table.setItem(row, 1, QTableWidgetItem(item.get("process_name") or item.get("exe_path") or "Unknown app"))
+            self.table.setItem(row, 2, QTableWidgetItem(item.get("title") or "Untitled window"))
+            self.table.setItem(row, 3, QTableWidgetItem(item.get("monitor_device", "")))
+            self.table.setItem(row, 4, QTableWidgetItem(position))
+        self.table.resizeRowsToContents()
+
+    def _set_all_checked(self, checked):
+        for checkbox in self._checkboxes:
+            checkbox.setChecked(checked)
+
+    def selected_windows(self):
+        return [item for item, checkbox in zip(self._windows, self._checkboxes) if checkbox.isChecked()]
+
+
 class LayoutsTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -46,7 +128,7 @@ class LayoutsTab(QWidget):
         header_layout = QHBoxLayout()
         title = QLabel("Window Layouts")
         title.setProperty("role", "heading")
-        self.capture_btn = QPushButton("Capture Current Layout")
+        self.capture_btn = QPushButton("Create Layout")
         self.capture_btn.clicked.connect(self.capture_layout)
         header_layout.addWidget(title)
         header_layout.addStretch(1)
@@ -83,10 +165,14 @@ class LayoutsTab(QWidget):
         self.rename_btn = QPushButton("Rename")
         self.rename_btn.setProperty("variant", "secondary")
         self.rename_btn.clicked.connect(self.rename_layout)
+        self.edit_btn = QPushButton("Edit")
+        self.edit_btn.setProperty("variant", "secondary")
+        self.edit_btn.clicked.connect(self.edit_layout)
         self.delete_btn = QPushButton("Delete")
         self.delete_btn.setProperty("variant", "danger")
         self.delete_btn.clicked.connect(self.delete_layout)
         layout_actions.addWidget(self.apply_btn)
+        layout_actions.addWidget(self.edit_btn)
         layout_actions.addWidget(self.rename_btn)
         layout_actions.addWidget(self.delete_btn)
         layouts_layout.addLayout(layout_actions)
@@ -116,15 +202,17 @@ class LayoutsTab(QWidget):
         outer.addWidget(self.status_label)
 
         self._layouts = []
-        self._capture_worker = None
+        self._items_worker = None
         self._apply_worker = None
+        self._pending_capture_name = ""
+        self._pending_edit_index = -1
         self.load()
 
     def load(self):
         self._layouts = window_layouts.load_layouts()
         self._render_layouts()
         self.status_label.setText(
-            "Capture your current desktop arrangement to create a layout."
+            "Create a layout from selected open app windows."
             if not self._layouts else f"Loaded {len(self._layouts)} saved layout(s)."
         )
 
@@ -158,6 +246,7 @@ class LayoutsTab(QWidget):
         layout = self._selected_layout()
         has_layout = layout is not None
         self.apply_btn.setEnabled(has_layout and bool(layout.get("windows") if layout else False))
+        self.edit_btn.setEnabled(has_layout)
         self.rename_btn.setEnabled(has_layout)
         self.delete_btn.setEnabled(has_layout)
         self._render_windows(layout)
@@ -186,52 +275,112 @@ class LayoutsTab(QWidget):
         self.status_label.setText(message)
 
     def capture_layout(self):
-        name, ok = QInputDialog.getText(self, "Capture Layout", "Layout name:")
+        name, ok = QInputDialog.getText(self, "Create Layout", "Layout name:")
         name = name.strip()
         if not ok or not name:
             return
-        self._set_busy(True, "Capturing visible app windows...")
-        self._capture_worker = CaptureLayoutWorker(name)
-        self._capture_worker.finished_with_layout.connect(self._on_captured)
-        self._capture_worker.start()
+        self._pending_capture_name = name
+        self._pending_edit_index = -1
+        self._load_current_windows("Finding open app windows...")
 
-    def _on_captured(self, layout, error):
+    def _load_current_windows(self, message):
+        self._set_busy(True, message)
+        self._items_worker = WindowItemsWorker()
+        self._items_worker.finished_with_items.connect(self._on_window_items_loaded)
+        self._items_worker.start()
+
+    def _on_window_items_loaded(self, items, error):
         self._set_busy(False)
         if error:
-            QMessageBox.warning(self, "Capture Failed", f"Could not capture this layout:\n\n{error}")
-            self.status_label.setText("Capture failed.")
+            QMessageBox.warning(self, "Window Scan Failed", f"Could not scan open windows:\n\n{error}")
+            self.status_label.setText("Window scan failed.")
+            self._pending_capture_name = ""
+            self._pending_edit_index = -1
             return
-        count = len(layout.get("windows", [])) if layout else 0
-        if count == 0:
+        if self._pending_edit_index >= 0:
+            self._show_edit_dialog(items)
+        else:
+            self._show_capture_dialog(items)
+
+    def _show_capture_dialog(self, items):
+        if not items:
             QMessageBox.information(
                 self,
-                "No Windows Captured",
+                "No Windows Found",
                 "No normal app windows were found. Open and arrange the apps you want, then try again.",
             )
-            self.status_label.setText("No app windows were captured.")
+            self.status_label.setText("No app windows were found.")
+            self._pending_capture_name = ""
             return
-        reply = QMessageBox.question(
+        dialog = WindowSelectionDialog(
             self,
-            "Save Layout",
-            f"Save \"{layout.get('name')}\" with {count} captured window(s)?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
+            "Choose Windows",
+            "Select the open app windows to include in this layout.",
+            items,
         )
-        if reply != QMessageBox.Yes:
-            self.status_label.setText("Captured layout was not saved.")
+        if dialog.exec() != QDialog.Accepted:
+            self.status_label.setText("Layout capture was canceled.")
+            self._pending_capture_name = ""
             return
+        selected = dialog.selected_windows()
+        if not selected:
+            QMessageBox.information(self, "Nothing Selected", "Choose at least one window to save a layout.")
+            self.status_label.setText("No windows were selected.")
+            self._pending_capture_name = ""
+            return
+        layout = window_layouts.build_layout(self._pending_capture_name, selected)
+        self._pending_capture_name = ""
         self._layouts.append(layout)
-        self._save_and_render(f"Saved \"{layout.get('name')}\" with {count} window(s).")
+        self._save_and_render(f"Saved \"{layout.get('name')}\" with {len(selected)} window(s).")
+
+    def _show_edit_dialog(self, current_items):
+        index = self._pending_edit_index
+        self._pending_edit_index = -1
+        if index < 0 or index >= len(self._layouts):
+            return
+        layout = self._layouts[index]
+        saved_items = layout.get("windows", [])
+        all_items = window_layouts.merge_layout_items(saved_items, current_items)
+        checked_keys = {window_layouts.layout_item_key(item) for item in saved_items}
+        if not all_items:
+            QMessageBox.information(self, "No Windows Available", "No saved or open windows are available to edit.")
+            return
+        dialog = WindowSelectionDialog(
+            self,
+            "Edit Layout",
+            "Toggle windows for this layout. Saved windows are checked; currently open extra windows are available too.",
+            all_items,
+            checked_keys,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            self.status_label.setText("Layout edit was canceled.")
+            return
+        selected = dialog.selected_windows()
+        if not selected:
+            QMessageBox.information(self, "Nothing Selected", "A layout needs at least one window.")
+            self.status_label.setText("Layout was not changed.")
+            return
+        updated = window_layouts.build_layout(
+            layout.get("name", "Untitled Layout"),
+            selected,
+            layout_id=layout.get("id"),
+            created_at=layout.get("created_at"),
+        )
+        self._layouts[index] = updated
+        self._save_and_render(f"Updated \"{updated.get('name')}\" with {len(selected)} window(s).")
 
     def confirm_and_apply(self):
         layout = self._selected_layout()
         if not layout:
             return
-        missing = window_layouts.missing_apps_for_layout(layout)
+        missing = window_layouts.missing_launches_for_layout(layout)
         message = f"Apply \"{layout.get('name')}\" and arrange {len(layout.get('windows', []))} window(s)?"
         if missing:
-            app_lines = "\n".join(f"- {path}" for path in missing)
-            message += f"\n\nThe following app(s) will be opened first:\n{app_lines}"
+            app_lines = "\n".join(
+                f"- {window_layouts.saved_window_label(item)} ({item.get('exe_path', 'Unknown app')})"
+                for item in missing
+            )
+            message += f"\n\nThe following missing window(s) will be opened first:\n{app_lines}"
         reply = QMessageBox.question(
             self,
             "Apply Layout",
@@ -285,6 +434,14 @@ class LayoutsTab(QWidget):
         layout["updated_at"] = window_layouts._now_iso()
         self._save_and_render(f"Renamed layout to \"{name}\".")
 
+    def edit_layout(self):
+        index = self._selected_layout_index()
+        if index < 0:
+            return
+        self._pending_edit_index = index
+        self._pending_capture_name = ""
+        self._load_current_windows("Finding open app windows for editing...")
+
     def delete_layout(self):
         index = self._selected_layout_index()
         layout = self._selected_layout()
@@ -308,6 +465,7 @@ class LayoutsTab(QWidget):
         can_apply = layout is not None and bool(layout.get("windows"))
         self.capture_btn.setEnabled(not busy)
         self.apply_btn.setEnabled(not busy and can_apply)
+        self.edit_btn.setEnabled(not busy and layout is not None)
         self.rename_btn.setEnabled(not busy and layout is not None)
         self.delete_btn.setEnabled(not busy and layout is not None)
         if message:

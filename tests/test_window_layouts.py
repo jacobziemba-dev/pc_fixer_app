@@ -94,3 +94,55 @@ def test_find_best_window_prefers_executable_path_before_title():
     ]
 
     assert window_layouts.find_best_window(saved, candidates)["hwnd"] == 2
+
+
+def test_merge_layout_items_keeps_saved_first_and_dedupes():
+    saved = [{
+        "exe_path": r"C:\Apps\editor.exe",
+        "title": "Project Notes",
+        "monitor_device": r"\\.\DISPLAY1",
+        "window_rect": {"left": 0, "top": 0, "right": 800, "bottom": 600},
+    }]
+    current = [
+        dict(saved[0]),
+        {
+            "exe_path": r"C:\Apps\browser.exe",
+            "title": "Docs",
+            "monitor_device": r"\\.\DISPLAY1",
+            "window_rect": {"left": 800, "top": 0, "right": 1600, "bottom": 600},
+        },
+    ]
+
+    merged = window_layouts.merge_layout_items(saved, current)
+
+    assert merged == [saved[0], current[1]]
+
+
+def test_build_layout_preserves_identity_when_editing():
+    layout = window_layouts.build_layout(
+        "Work",
+        [{"title": "Editor"}],
+        layout_id="layout-1",
+        created_at="2026-07-10T12:00:00",
+    )
+
+    assert layout["id"] == "layout-1"
+    assert layout["created_at"] == "2026-07-10T12:00:00"
+    assert layout["name"] == "Work"
+    assert layout["windows"] == [{"title": "Editor"}]
+
+
+def test_missing_windows_accounts_for_duplicate_app_windows():
+    layout = {
+        "windows": [
+            {"exe_path": r"C:\Apps\editor.exe", "title": "File One"},
+            {"exe_path": r"C:\Apps\editor.exe", "title": "File Two"},
+        ],
+    }
+    candidates = [
+        {"hwnd": 10, "exe_path": r"C:\Apps\editor.exe", "title": "File One"},
+    ]
+
+    missing = window_layouts.missing_windows_for_layout(layout, candidates)
+
+    assert missing == [layout["windows"][1]]

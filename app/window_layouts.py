@@ -243,28 +243,72 @@ def enumerate_app_windows(include_self=False):
 
 
 def capture_current_layout(name):
+    return build_layout(name, collect_current_window_items())
+
+
+def _window_to_layout_item(window, monitor):
+    return {
+        "title": window["title"],
+        "exe_path": window["exe_path"],
+        "process_name": os.path.basename(window["exe_path"]) if window["exe_path"] else "",
+        "monitor_device": monitor["device"],
+        "monitor_rect": monitor["monitor_rect"],
+        "window_rect": window["rect"],
+        "relative_rect": rect_to_relative(window["rect"], monitor["monitor_rect"]),
+    }
+
+
+def layout_item_key(item):
+    rect = item.get("window_rect") or {}
+    rect_key = (
+        rect.get("left", ""),
+        rect.get("top", ""),
+        rect.get("right", ""),
+        rect.get("bottom", ""),
+    )
+    return (
+        normalize_exe_path(item.get("exe_path")),
+        str(item.get("title") or "").strip().lower(),
+        str(item.get("monitor_device") or "").strip().lower(),
+        rect_key,
+    )
+
+
+def collect_current_window_items():
     monitors = get_monitor_layouts()
     windows = []
     for window in enumerate_app_windows():
         monitor = monitor_for_rect(window["rect"], monitors)
         if not monitor:
             continue
-        windows.append({
-            "title": window["title"],
-            "exe_path": window["exe_path"],
-            "process_name": os.path.basename(window["exe_path"]) if window["exe_path"] else "",
-            "monitor_device": monitor["device"],
-            "monitor_rect": monitor["monitor_rect"],
-            "window_rect": window["rect"],
-            "relative_rect": rect_to_relative(window["rect"], monitor["monitor_rect"]),
-        })
+        windows.append(_window_to_layout_item(window, monitor))
+    windows.sort(key=lambda item: (
+        (item.get("process_name") or item.get("exe_path") or "").lower(),
+        (item.get("title") or "").lower(),
+    ))
+    return windows
+
+
+def merge_layout_items(saved_items, current_items):
+    merged = []
+    seen = set()
+    for item in list(saved_items or []) + list(current_items or []):
+        key = layout_item_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
+def build_layout(name, windows, layout_id=None, created_at=None):
     now = _now_iso()
     return {
-        "id": str(uuid.uuid4()),
+        "id": layout_id or str(uuid.uuid4()),
         "name": name,
-        "created_at": now,
+        "created_at": created_at or now,
         "updated_at": now,
-        "windows": windows,
+        "windows": list(windows),
     }
 
 
@@ -288,6 +332,32 @@ def find_best_window(saved_window, candidates, used_hwnds=None):
             if window.get("hwnd") not in used_hwnds and title in window.get("title", "").lower():
                 return window
     return None
+
+
+def saved_window_label(saved_window):
+    return (
+        saved_window.get("title")
+        or saved_window.get("process_name")
+        or saved_window.get("exe_path")
+        or "Unknown window"
+    )
+
+
+def missing_windows_for_layout(layout, candidates=None):
+    candidates = enumerate_app_windows() if candidates is None else candidates
+    used_hwnds = set()
+    missing = []
+    for saved_window in layout.get("windows", []):
+        match = find_best_window(saved_window, candidates, used_hwnds)
+        if match:
+            used_hwnds.add(match["hwnd"])
+        else:
+            missing.append(saved_window)
+    return missing
+
+
+def _all_layout_windows_matched(layout, candidates):
+    return not missing_windows_for_layout(layout, candidates)
 
 
 def _running_paths():
@@ -316,6 +386,19 @@ def missing_apps_for_layout(layout):
     return missing
 
 
+def missing_launches_for_layout(layout):
+    missing = []
+    seen = set()
+    for item in missing_windows_for_layout(layout):
+        exe_path = item.get("exe_path", "")
+        key = (normalize_exe_path(exe_path), saved_window_label(item))
+        if not exe_path or key in seen:
+            continue
+        seen.add(key)
+        missing.append(item)
+    return missing
+
+
 def _launch_missing_apps(paths):
     launched = []
     errors = []
@@ -335,7 +418,7 @@ def _wait_for_layout_windows(layout, timeout=8.0):
     deadline = time.monotonic() + timeout
     candidates = enumerate_app_windows()
     while time.monotonic() < deadline:
-        if all(find_best_window(item, candidates) for item in layout.get("windows", [])):
+        if _all_layout_windows_matched(layout, candidates):
             break
         time.sleep(0.3)
         candidates = enumerate_app_windows()
@@ -343,7 +426,9 @@ def _wait_for_layout_windows(layout, timeout=8.0):
 
 
 def apply_layout(layout, launch_missing=True):
-    missing_paths = missing_apps_for_layout(layout) if launch_missing else []
+    candidates = enumerate_app_windows()
+    missing_windows = missing_windows_for_layout(layout, candidates) if launch_missing else []
+    missing_paths = [item.get("exe_path", "") for item in missing_windows if item.get("exe_path")]
     launched, launch_errors = _launch_missing_apps(missing_paths) if launch_missing else ([], [])
     candidates = _wait_for_layout_windows(layout) if launched else enumerate_app_windows()
     monitors = get_monitor_layouts()
@@ -355,7 +440,7 @@ def apply_layout(layout, launch_missing=True):
     for saved_window in layout.get("windows", []):
         match = find_best_window(saved_window, candidates, used_hwnds)
         if not match:
-            missing.append(saved_window.get("title") or saved_window.get("exe_path") or "Unknown window")
+            missing.append(saved_window_label(saved_window))
             continue
         used_hwnds.add(match["hwnd"])
         target_monitor = choose_monitor_rect(saved_window, monitors)

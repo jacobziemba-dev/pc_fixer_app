@@ -137,6 +137,9 @@ class LayoutPreviewCanvas(QWidget):
 
         color = self.WINDOW_COLORS[index % len(self.WINDOW_COLORS)]
         title_bar = min(max(height // 5, 16), 24)
+        painter.setBrush(QColor(0, 0, 0, 68))
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(x + 4, y + 5, width, height, 5, 5)
         painter.setBrush(color)
         painter.setPen(QPen(QColor("#e4e8ff"), 1))
         painter.drawRoundedRect(x, y, width, height, 5, 5)
@@ -151,6 +154,18 @@ class LayoutPreviewCanvas(QWidget):
         app_text = metrics.elidedText(window.get("app") or "App", Qt.ElideRight, text_width)
         painter.setPen(self.WINDOW_TEXT)
         painter.drawText(text_x, y + 4, text_width, title_bar, Qt.AlignLeft | Qt.AlignVCenter, app_text)
+        layer_text = window.get("layer_label") or ""
+        if layer_text and width > 96:
+            layer_width = min(metrics.horizontalAdvance(layer_text) + 12, max(width // 3, 34))
+            painter.setPen(QColor("#f7f8ff"))
+            painter.drawText(
+                x + width - layer_width - 6,
+                y + 4,
+                layer_width,
+                title_bar,
+                Qt.AlignRight | Qt.AlignVCenter,
+                layer_text,
+            )
 
         if width > 130 and height > 52:
             label = metrics.elidedText(window.get("label") or "", Qt.ElideRight, text_width)
@@ -532,6 +547,7 @@ class LayoutsTab(QWidget):
             (
                 self._current_item_key(item),
                 item.get("process_name", ""),
+                item.get("z_order"),
             )
             for item in items
         )

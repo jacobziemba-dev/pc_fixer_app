@@ -218,6 +218,13 @@ def _display_resolution_label(rect):
     return f"{rect_width(rect)} x {rect_height(rect)}" if is_rect(rect) else ""
 
 
+def _int_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_preview_scene(layout, canvas_width, canvas_height, padding=24):
     monitors = saved_monitor_rects_for_layout(layout)
     desktop_rect = union_rect(monitor["rect"] for monitor in monitors)
@@ -243,7 +250,8 @@ def build_preview_scene(layout, canvas_width, canvas_height, padding=24):
             "preview_rect": _preview_rect(monitor["rect"], desktop_rect, scale, offset_x, offset_y),
         })
     scene_windows = []
-    for item in layout.get("windows", []):
+    has_z_order = False
+    for source_index, item in enumerate(layout.get("windows", [])):
         window_rect = item.get("window_rect")
         if not is_rect(window_rect):
             monitor_rect = item.get("monitor_rect")
@@ -252,13 +260,31 @@ def build_preview_scene(layout, canvas_width, canvas_height, padding=24):
                 window_rect = relative_to_rect(relative_rect, monitor_rect)
         if not is_rect(window_rect):
             continue
+        z_order = _int_or_none(item.get("z_order"))
+        has_z_order = has_z_order or z_order is not None
         scene_windows.append({
             "label": saved_window_label(item),
             "app": item.get("process_name") or item.get("exe_path") or "App",
             "monitor_device": item.get("monitor_device", ""),
+            "z_order": z_order,
+            "front_rank": None,
+            "layer_label": "",
+            "source_index": source_index,
             "rect": window_rect,
             "preview_rect": _preview_rect(window_rect, desktop_rect, scale, offset_x, offset_y),
         })
+    if has_z_order:
+        front_to_back = sorted(
+            scene_windows,
+            key=lambda window: (
+                window["z_order"] if window["z_order"] is not None else window["source_index"],
+                window["source_index"],
+            ),
+        )
+        for rank, window in enumerate(front_to_back, start=1):
+            window["front_rank"] = rank
+            window["layer_label"] = "Top" if rank == 1 else f"Layer {rank}"
+        scene_windows = list(reversed(front_to_back))
     return {
         "desktop_rect": desktop_rect,
         "scale": scale,
@@ -400,6 +426,7 @@ def enumerate_app_windows(include_self=False):
         except Exception:
             return True
         if is_normal_window_info(info, None if include_self else self_pid):
+            info["z_order"] = len(windows)
             windows.append(info)
         return True
 
@@ -420,6 +447,7 @@ def _window_to_layout_item(window, monitor):
         "monitor_rect": monitor["monitor_rect"],
         "window_rect": window["rect"],
         "relative_rect": rect_to_relative(window["rect"], monitor["monitor_rect"]),
+        "z_order": window.get("z_order"),
     }
 
 
@@ -455,10 +483,6 @@ def collect_current_window_items():
         if not monitor:
             continue
         windows.append(_window_to_layout_item(window, monitor))
-    windows.sort(key=lambda item: (
-        (item.get("process_name") or item.get("exe_path") or "").lower(),
-        (item.get("title") or "").lower(),
-    ))
     return windows
 
 

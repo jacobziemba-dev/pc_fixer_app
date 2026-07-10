@@ -282,6 +282,80 @@ def test_preview_scene_has_no_monitors_for_empty_layout():
     assert scene["windows"] == []
 
 
+def test_preview_scene_draws_z_order_back_to_front():
+    monitor_rect = {"left": 0, "top": 0, "right": 1000, "bottom": 500}
+    layout = {
+        "displays": [{"device": r"\\.\DISPLAY1", "monitor_rect": monitor_rect}],
+        "windows": [
+            {
+                "title": "Top Window",
+                "process_name": "top.exe",
+                "monitor_rect": monitor_rect,
+                "window_rect": {"left": 0, "top": 0, "right": 500, "bottom": 250},
+                "z_order": 0,
+            },
+            {
+                "title": "Bottom Window",
+                "process_name": "bottom.exe",
+                "monitor_rect": monitor_rect,
+                "window_rect": {"left": 100, "top": 100, "right": 600, "bottom": 350},
+                "z_order": 2,
+            },
+            {
+                "title": "Middle Window",
+                "process_name": "middle.exe",
+                "monitor_rect": monitor_rect,
+                "window_rect": {"left": 50, "top": 50, "right": 550, "bottom": 300},
+                "z_order": 1,
+            },
+        ],
+    }
+
+    scene = window_layouts.build_preview_scene(layout, 1000, 500, padding=0)
+
+    assert [window["app"] for window in scene["windows"]] == [
+        "bottom.exe",
+        "middle.exe",
+        "top.exe",
+    ]
+    assert [window["layer_label"] for window in scene["windows"]] == [
+        "Layer 3",
+        "Layer 2",
+        "Top",
+    ]
+
+
+def test_collect_current_window_items_preserves_z_order(monkeypatch):
+    monitor_rect = {"left": 0, "top": 0, "right": 1000, "bottom": 500}
+    monitors = [{
+        "device": r"\\.\DISPLAY1",
+        "is_primary": True,
+        "monitor_rect": monitor_rect,
+        "work_rect": monitor_rect,
+    }]
+    windows = [
+        {
+            "title": "Top",
+            "exe_path": r"C:\Apps\zzz.exe",
+            "rect": {"left": 0, "top": 0, "right": 300, "bottom": 200},
+            "z_order": 0,
+        },
+        {
+            "title": "Bottom",
+            "exe_path": r"C:\Apps\aaa.exe",
+            "rect": {"left": 20, "top": 20, "right": 320, "bottom": 220},
+            "z_order": 1,
+        },
+    ]
+    monkeypatch.setattr(window_layouts, "get_monitor_layouts", lambda: monitors)
+    monkeypatch.setattr(window_layouts, "enumerate_app_windows", lambda: windows)
+
+    items = window_layouts.collect_current_window_items()
+
+    assert [item["process_name"] for item in items] == ["zzz.exe", "aaa.exe"]
+    assert [item["z_order"] for item in items] == [0, 1]
+
+
 def test_build_layout_derives_displays_from_windows_for_legacy_callers():
     layout = window_layouts.build_layout(
         "Legacy",

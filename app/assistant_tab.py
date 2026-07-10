@@ -35,7 +35,7 @@ class ModelLoadWorker(QThread):
 
 class InferenceWorker(QThread):
     token_received = Signal(str)
-    finished = Signal()
+    inference_complete = Signal()
     error = Signal(str)
 
     def __init__(self, engine, user_prompt, system_prompt=DEFAULT_SYSTEM_PROMPT):
@@ -51,7 +51,7 @@ class InferenceWorker(QThread):
                 self._user_prompt,
             ):
                 self.token_received.emit(token)
-            self.finished.emit()
+            self.inference_complete.emit()
         except AIEngineError as exc:
             self.error.emit(str(exc))
         except Exception as exc:
@@ -124,8 +124,16 @@ class AssistantTab(QWidget):
         self.input_field.setEnabled(enabled)
         self.send_btn.setEnabled(enabled)
 
+    def _worker_is_running(self, worker):
+        if worker is None:
+            return False
+        try:
+            return worker.isRunning()
+        except RuntimeError:
+            return False
+
     def _start_model_load(self):
-        if self._load_worker and self._load_worker.isRunning():
+        if self._worker_is_running(self._load_worker):
             return
 
         self._load_started = True
@@ -135,8 +143,15 @@ class AssistantTab(QWidget):
         self._load_worker = ModelLoadWorker(self._engine)
         self._load_worker.finished_ok.connect(self._on_model_loaded)
         self._load_worker.error.connect(self._on_model_error)
+        self._load_worker.finished.connect(self._clear_load_worker)
         self._load_worker.finished.connect(self._load_worker.deleteLater)
         self._load_worker.start()
+
+    def _clear_load_worker(self):
+        self._load_worker = None
+
+    def _clear_infer_worker(self):
+        self._infer_worker = None
 
     def _on_model_loaded(self):
         self._model_ready = True
@@ -165,7 +180,7 @@ class AssistantTab(QWidget):
     def _send_message(self):
         if not self._model_ready:
             return
-        if self._infer_worker and self._infer_worker.isRunning():
+        if self._worker_is_running(self._infer_worker):
             return
 
         user_text = self.input_field.text().strip()
@@ -181,8 +196,9 @@ class AssistantTab(QWidget):
 
         self._infer_worker = InferenceWorker(self._engine, user_text)
         self._infer_worker.token_received.connect(self._on_token_received)
-        self._infer_worker.finished.connect(self._on_inference_finished)
+        self._infer_worker.inference_complete.connect(self._on_inference_finished)
         self._infer_worker.error.connect(self._on_inference_error)
+        self._infer_worker.finished.connect(self._clear_infer_worker)
         self._infer_worker.finished.connect(self._infer_worker.deleteLater)
         self._infer_worker.start()
 

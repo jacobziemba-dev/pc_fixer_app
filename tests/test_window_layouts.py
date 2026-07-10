@@ -146,3 +146,62 @@ def test_missing_windows_accounts_for_duplicate_app_windows():
     missing = window_layouts.missing_windows_for_layout(layout, candidates)
 
     assert missing == [layout["windows"][1]]
+
+
+def test_preview_scene_builds_single_saved_monitor():
+    layout = {
+        "windows": [{
+            "title": "Editor",
+            "process_name": "editor.exe",
+            "monitor_device": r"\\.\DISPLAY1",
+            "monitor_rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
+            "window_rect": {"left": 0, "top": 0, "right": 960, "bottom": 540},
+        }],
+    }
+
+    scene = window_layouts.build_preview_scene(layout, 960, 540, padding=0)
+
+    assert len(scene["monitors"]) == 1
+    assert len(scene["windows"]) == 1
+    assert scene["monitors"][0]["preview_rect"] == {"x": 0, "y": 0, "width": 960, "height": 540}
+    assert scene["windows"][0]["preview_rect"] == {"x": 0, "y": 0, "width": 480, "height": 270}
+
+
+def test_preview_scene_preserves_negative_monitor_coordinates():
+    layout = {
+        "windows": [
+            {
+                "title": "Chat",
+                "monitor_device": r"\\.\DISPLAY2",
+                "monitor_rect": {"left": -1280, "top": 0, "right": 0, "bottom": 720},
+                "window_rect": {"left": -1280, "top": 0, "right": -640, "bottom": 720},
+            },
+            {
+                "title": "Editor",
+                "monitor_device": r"\\.\DISPLAY1",
+                "monitor_rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
+                "window_rect": {"left": 0, "top": 0, "right": 960, "bottom": 540},
+            },
+        ],
+    }
+
+    scene = window_layouts.build_preview_scene(layout, 3200, 1080, padding=0)
+
+    monitors = {monitor["device"]: monitor["preview_rect"] for monitor in scene["monitors"]}
+    assert monitors[r"\\.\DISPLAY2"]["x"] == 0
+    assert monitors[r"\\.\DISPLAY1"]["x"] == 1280
+
+
+def test_preview_scene_handles_missing_monitor_data():
+    layout = {
+        "windows": [{
+            "title": "Untitled",
+            "window_rect": {"left": 20, "top": 30, "right": 420, "bottom": 330},
+        }],
+    }
+
+    scene = window_layouts.build_preview_scene(layout, 800, 600, padding=20)
+
+    assert len(scene["monitors"]) == 1
+    assert len(scene["windows"]) == 1
+    assert scene["desktop_rect"] == {"left": 20, "top": 30, "right": 420, "bottom": 330}

@@ -20,6 +20,7 @@ LAYOUT_SCHEMA_VERSION = 1
 
 MIN_WINDOW_WIDTH = 80
 MIN_WINDOW_HEIGHT = 60
+PREVIEW_FALLBACK_MONITOR = {"left": 0, "top": 0, "right": 1280, "bottom": 720}
 
 _SKIPPED_CLASSES = {
     "Progman",
@@ -89,6 +90,27 @@ def rect_height(rect):
     return int(rect["bottom"]) - int(rect["top"])
 
 
+def is_rect(rect):
+    return (
+        isinstance(rect, dict)
+        and {"left", "top", "right", "bottom"}.issubset(rect)
+        and rect_width(rect) > 0
+        and rect_height(rect) > 0
+    )
+
+
+def union_rect(rects):
+    valid_rects = [rect for rect in rects if is_rect(rect)]
+    if not valid_rects:
+        return dict(PREVIEW_FALLBACK_MONITOR)
+    return {
+        "left": min(int(rect["left"]) for rect in valid_rects),
+        "top": min(int(rect["top"]) for rect in valid_rects),
+        "right": max(int(rect["right"]) for rect in valid_rects),
+        "bottom": max(int(rect["bottom"]) for rect in valid_rects),
+    }
+
+
 def rect_to_relative(window_rect, monitor_rect):
     monitor_width = max(rect_width(monitor_rect), 1)
     monitor_height = max(rect_height(monitor_rect), 1)
@@ -112,6 +134,89 @@ def relative_to_rect(relative_rect, monitor_rect):
     left = min(max(left, int(monitor_rect["left"])), max_left)
     top = min(max(top, int(monitor_rect["top"])), max_top)
     return {"left": left, "top": top, "right": left + width, "bottom": top + height}
+
+
+def saved_monitor_rects_for_layout(layout):
+    monitors = []
+    seen = set()
+    for item in layout.get("windows", []):
+        monitor_rect = item.get("monitor_rect")
+        if not is_rect(monitor_rect):
+            continue
+        key = (
+            item.get("monitor_device", ""),
+            int(monitor_rect["left"]),
+            int(monitor_rect["top"]),
+            int(monitor_rect["right"]),
+            int(monitor_rect["bottom"]),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        monitors.append({
+            "device": item.get("monitor_device", "") or f"Display {len(monitors) + 1}",
+            "rect": monitor_rect,
+        })
+    if monitors:
+        return monitors
+    return [{"device": "Saved Display", "rect": union_rect(
+        item.get("window_rect") for item in layout.get("windows", [])
+    )}]
+
+
+def _preview_rect(rect, desktop_rect, scale, offset_x, offset_y):
+    return {
+        "x": int(round(offset_x + (int(rect["left"]) - int(desktop_rect["left"])) * scale)),
+        "y": int(round(offset_y + (int(rect["top"]) - int(desktop_rect["top"])) * scale)),
+        "width": max(int(round(rect_width(rect) * scale)), 1),
+        "height": max(int(round(rect_height(rect) * scale)), 1),
+    }
+
+
+def build_preview_scene(layout, canvas_width, canvas_height, padding=24):
+    monitors = saved_monitor_rects_for_layout(layout)
+    desktop_rect = union_rect(monitor["rect"] for monitor in monitors)
+    available_width = max(int(canvas_width) - padding * 2, 1)
+    available_height = max(int(canvas_height) - padding * 2, 1)
+    scale = min(
+        available_width / max(rect_width(desktop_rect), 1),
+        available_height / max(rect_height(desktop_rect), 1),
+    )
+    content_width = rect_width(desktop_rect) * scale
+    content_height = rect_height(desktop_rect) * scale
+    offset_x = int(round((int(canvas_width) - content_width) / 2))
+    offset_y = int(round((int(canvas_height) - content_height) / 2))
+    scene_monitors = [
+        {
+            "device": monitor["device"],
+            "rect": monitor["rect"],
+            "preview_rect": _preview_rect(monitor["rect"], desktop_rect, scale, offset_x, offset_y),
+        }
+        for monitor in monitors
+    ]
+    scene_windows = []
+    for item in layout.get("windows", []):
+        window_rect = item.get("window_rect")
+        if not is_rect(window_rect):
+            monitor_rect = item.get("monitor_rect")
+            relative_rect = item.get("relative_rect")
+            if is_rect(monitor_rect) and relative_rect:
+                window_rect = relative_to_rect(relative_rect, monitor_rect)
+        if not is_rect(window_rect):
+            continue
+        scene_windows.append({
+            "label": saved_window_label(item),
+            "app": item.get("process_name") or item.get("exe_path") or "App",
+            "monitor_device": item.get("monitor_device", ""),
+            "rect": window_rect,
+            "preview_rect": _preview_rect(window_rect, desktop_rect, scale, offset_x, offset_y),
+        })
+    return {
+        "desktop_rect": desktop_rect,
+        "scale": scale,
+        "monitors": scene_monitors,
+        "windows": scene_windows,
+    }
 
 
 def _rect_from_tuple(rect):

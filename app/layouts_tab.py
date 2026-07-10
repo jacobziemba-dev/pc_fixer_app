@@ -1,4 +1,5 @@
 from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QInputDialog,
@@ -120,6 +121,85 @@ class WindowSelectionDialog(QDialog):
         return [item for item, checkbox in zip(self._windows, self._checkboxes) if checkbox.isChecked()]
 
 
+class LayoutPreviewCanvas(QWidget):
+    WINDOW_COLORS = [
+        QColor(109, 141, 255, 160),
+        QColor(72, 190, 145, 155),
+        QColor(245, 166, 35, 150),
+        QColor(239, 83, 80, 145),
+        QColor(166, 120, 255, 150),
+    ]
+
+    def __init__(self, layout):
+        super().__init__()
+        self._layout = layout
+        self.setMinimumSize(780, 440)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#1e1f26"))
+
+        scene = window_layouts.build_preview_scene(self._layout, self.width(), self.height(), 32)
+        if not scene["monitors"]:
+            painter.setPen(QColor("#9294a3"))
+            painter.drawText(self.rect(), Qt.AlignCenter, "No saved windows to preview.")
+            return
+
+        painter.setPen(QPen(QColor("#33343d"), 1))
+        painter.setBrush(QColor("#24252d"))
+        for monitor in scene["monitors"]:
+            rect = monitor["preview_rect"]
+            painter.drawRoundedRect(rect["x"], rect["y"], rect["width"], rect["height"], 8, 8)
+            painter.setPen(QColor("#b7b8c2"))
+            painter.drawText(rect["x"] + 10, rect["y"] + 22, monitor["device"])
+            painter.setPen(QPen(QColor("#33343d"), 1))
+
+        metrics = QFontMetrics(painter.font())
+        for index, window in enumerate(scene["windows"]):
+            rect = window["preview_rect"]
+            color = self.WINDOW_COLORS[index % len(self.WINDOW_COLORS)]
+            painter.setBrush(color)
+            painter.setPen(QPen(QColor("#d8ddff"), 1))
+            painter.drawRoundedRect(rect["x"], rect["y"], rect["width"], rect["height"], 5, 5)
+
+            label = window["app"]
+            if rect["width"] > 150 and rect["height"] > 42:
+                label = window["label"]
+            text_width = max(rect["width"] - 12, 10)
+            text = metrics.elidedText(label, Qt.ElideRight, text_width)
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(
+                rect["x"] + 6,
+                rect["y"] + 6,
+                text_width,
+                max(rect["height"] - 12, 12),
+                Qt.AlignLeft | Qt.AlignTop,
+                text,
+            )
+
+
+class LayoutPreviewDialog(QDialog):
+    def __init__(self, parent, layout):
+        super().__init__(parent)
+        self.setWindowTitle(f"Preview - {layout.get('name', 'Layout')}")
+        self.resize(900, 560)
+
+        outer = QVBoxLayout(self)
+        title = QLabel(layout.get("name", "Untitled Layout"))
+        title.setProperty("role", "heading")
+        subtitle = QLabel("Saved monitor and window positions exactly as captured.")
+        subtitle.setProperty("role", "caption")
+        outer.addWidget(title)
+        outer.addWidget(subtitle)
+        outer.addWidget(LayoutPreviewCanvas(layout), 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        outer.addWidget(buttons)
+
+
 class LayoutsTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -162,6 +242,9 @@ class LayoutsTab(QWidget):
         layout_actions = QHBoxLayout()
         self.apply_btn = QPushButton("Apply Layout")
         self.apply_btn.clicked.connect(self.confirm_and_apply)
+        self.preview_btn = QPushButton("Preview")
+        self.preview_btn.setProperty("variant", "secondary")
+        self.preview_btn.clicked.connect(self.preview_layout)
         self.rename_btn = QPushButton("Rename")
         self.rename_btn.setProperty("variant", "secondary")
         self.rename_btn.clicked.connect(self.rename_layout)
@@ -172,6 +255,7 @@ class LayoutsTab(QWidget):
         self.delete_btn.setProperty("variant", "danger")
         self.delete_btn.clicked.connect(self.delete_layout)
         layout_actions.addWidget(self.apply_btn)
+        layout_actions.addWidget(self.preview_btn)
         layout_actions.addWidget(self.edit_btn)
         layout_actions.addWidget(self.rename_btn)
         layout_actions.addWidget(self.delete_btn)
@@ -246,6 +330,7 @@ class LayoutsTab(QWidget):
         layout = self._selected_layout()
         has_layout = layout is not None
         self.apply_btn.setEnabled(has_layout and bool(layout.get("windows") if layout else False))
+        self.preview_btn.setEnabled(has_layout and bool(layout.get("windows") if layout else False))
         self.edit_btn.setEnabled(has_layout)
         self.rename_btn.setEnabled(has_layout)
         self.delete_btn.setEnabled(has_layout)
@@ -434,6 +519,13 @@ class LayoutsTab(QWidget):
         layout["updated_at"] = window_layouts._now_iso()
         self._save_and_render(f"Renamed layout to \"{name}\".")
 
+    def preview_layout(self):
+        layout = self._selected_layout()
+        if not layout or not layout.get("windows"):
+            return
+        dialog = LayoutPreviewDialog(self, layout)
+        dialog.exec()
+
     def edit_layout(self):
         index = self._selected_layout_index()
         if index < 0:
@@ -465,6 +557,7 @@ class LayoutsTab(QWidget):
         can_apply = layout is not None and bool(layout.get("windows"))
         self.capture_btn.setEnabled(not busy)
         self.apply_btn.setEnabled(not busy and can_apply)
+        self.preview_btn.setEnabled(not busy and can_apply)
         self.edit_btn.setEnabled(not busy and layout is not None)
         self.rename_btn.setEnabled(not busy and layout is not None)
         self.delete_btn.setEnabled(not busy and layout is not None)

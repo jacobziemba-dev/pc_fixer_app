@@ -9,9 +9,8 @@ This repository contains a Windows-focused Python desktop app for PC diagnostics
 - `app/system_info.py` centralizes OS, process, disk, startup, and cleanup data access.
 - `app/theme.py` contains shared Qt stylesheet definitions.
 - `app/scripts/hardware_info.ps1` supports Windows hardware discovery.
-- `requirements.txt` lists runtime dependencies.
-
-There is no dedicated `tests/` directory yet. Add one when introducing automated coverage.
+- `requirements.txt` lists runtime and test dependencies (including `pytest`).
+- `tests/` holds automated tests (`test_*.py`).
 
 ## Build, Test, and Development Commands
 
@@ -42,7 +41,7 @@ Prefer small helper functions in `system_info.py` for platform access, and keep 
 
 When adding tests, use `pytest` unless the project adopts a different framework. Place tests under `tests/` and name files `test_<module>.py`. Prioritize pure helpers such as byte formatting, cleanup target selection, parsing, and registry-data normalization. For UI behavior, keep tests focused on logic that can run without requiring manual window interaction.
 
-Run future tests with:
+Run tests with:
 
 ```powershell
 .\venv\Scripts\python.exe -m pytest

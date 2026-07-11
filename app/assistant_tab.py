@@ -49,16 +49,13 @@ from app.chat_widgets import (
 DISPLAY_REVIEW_PROMPT = "Review my display setup and mention anything unusual about monitor modes."
 AUDIO_REVIEW_PROMPT = "Review my audio devices and app sessions at a high level."
 LAYOUT_REVIEW_PROMPT = "Review my window layouts and suggest what I should refresh or check."
+NETWORK_REVIEW_PROMPT = "Diagnose my current network status and mention any likely connection issues."
 
 QUICK_ACTIONS = [
-    ("Health", HEALTH_CHECK_PROMPT, False),
-    ("Slow PC", SLOW_PC_PROMPT, False),
-    ("Disk", DISK_SPACE_PROMPT, False),
-    ("Startup", STARTUP_REVIEW_PROMPT, False),
-    ("Cleanup", CLEANUP_REVIEW_PROMPT, True),
-    ("Display", DISPLAY_REVIEW_PROMPT, False),
-    ("Audio", AUDIO_REVIEW_PROMPT, False),
-    ("Layouts", LAYOUT_REVIEW_PROMPT, False),
+    ("Health", "Check overall PC health and stats.", HEALTH_CHECK_PROMPT, False),
+    ("Slow PC", "Find what's slowing your PC down.", SLOW_PC_PROMPT, False),
+    ("Cleanup", "Free up space and remove junk.", CLEANUP_REVIEW_PROMPT, True),
+    ("Network", "Diagnose network issues.", NETWORK_REVIEW_PROMPT, False),
 ]
 
 
@@ -204,14 +201,14 @@ class AssistantTab(QWidget):
         self._current_snapshot = None
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 14, 16, 14)
+        outer.setContentsMargins(14, 12, 14, 12)
         outer.setSpacing(10)
 
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(4, 0, 4, 0)
-        title = QLabel("AI Chat")
-        title.setProperty("role", "heading")
-        header_layout.addWidget(title)
+        section_label = QLabel("PC Fix Assistant")
+        section_label.setProperty("role", "eyebrow")
+        header_layout.addWidget(section_label)
         header_layout.addStretch(1)
 
         self.status_chip = QLabel("Checking model")
@@ -240,12 +237,10 @@ class AssistantTab(QWidget):
         outer.addLayout(header_layout)
 
         body_layout = QHBoxLayout()
-        body_layout.setSpacing(12)
-        body_layout.addStretch(1)
+        body_layout.setSpacing(0)
 
         thread_shell = QFrame()
         thread_shell.setProperty("role", "chat-thread")
-        thread_shell.setMaximumWidth(780)
         thread_layout = QVBoxLayout(thread_shell)
         thread_layout.setContentsMargins(0, 0, 0, 0)
         thread_layout.setSpacing(0)
@@ -255,7 +250,7 @@ class AssistantTab(QWidget):
         self.scroll.setProperty("role", "chat-scroll")
         self.feed = QWidget()
         self.feed_layout = QVBoxLayout(self.feed)
-        self.feed_layout.setContentsMargins(10, 12, 10, 12)
+        self.feed_layout.setContentsMargins(18, 18, 18, 14)
         self.feed_layout.setSpacing(12)
 
         self.welcome_state = WelcomeState(QUICK_ACTIONS)
@@ -274,22 +269,17 @@ class AssistantTab(QWidget):
         self.scroll.setWidget(self.feed)
         thread_layout.addWidget(self.scroll, 1)
 
-        body_layout.addWidget(thread_shell, 2)
-        self.context_drawer = ContextDrawer()
-        self.context_drawer.setVisible(False)
-        self.context_drawer.refresh_requested.connect(lambda: self._refresh_snapshot(False))
-        body_layout.addWidget(self.context_drawer)
-        body_layout.addStretch(1)
-        outer.addLayout(body_layout, 1)
-
-        dock_row = QHBoxLayout()
-        dock_row.setContentsMargins(8, 4, 8, 2)
-        dock_row.addStretch(1)
         self.input_dock = ChatInputDock()
         self.input_dock.submitted.connect(self._send_message_text)
-        dock_row.addWidget(self.input_dock, 2)
-        dock_row.addStretch(1)
-        outer.addLayout(dock_row)
+        thread_layout.addWidget(self.input_dock)
+
+        body_layout.addWidget(thread_shell, 1)
+        self.context_drawer = ContextDrawer()
+        self.context_drawer.refresh_requested.connect(lambda: self._refresh_snapshot(False))
+        body_layout.addWidget(self.context_drawer)
+        outer.addLayout(body_layout, 1)
+
+        self.context_btn.setChecked(True)
 
         self._refresh_snapshot(False)
         if not model_exists():

@@ -16,7 +16,7 @@ class MessageBubble(QFrame):
     def __init__(self, role, text=""):
         super().__init__()
         self.setProperty("role", f"message-{role}")
-        max_width = 660 if role in ("user", "assistant") else 560
+        max_width = 560 if role in ("user", "assistant") else 560
         self.setMaximumWidth(max_width)
         self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
 
@@ -65,43 +65,46 @@ class ActionCard(QFrame):
         super().__init__()
         self._action = action
         self.setProperty("role", "action-card")
-        self.setMaximumWidth(660)
+        self.setMaximumWidth(760)
         self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(10)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(14)
 
-        title = QLabel(action.title)
+        icon = QLabel("*")
+        icon.setProperty("role", "action-icon")
+        icon.setAlignment(Qt.AlignCenter)
+        layout.addWidget(icon, 0, Qt.AlignTop)
+
+        copy = QVBoxLayout()
+        copy.setSpacing(4)
+        title = QLabel("Suggested action")
         title.setProperty("role", "action-title")
         title.setWordWrap(True)
-        layout.addWidget(title)
+        copy.addWidget(title)
 
-        desc = QLabel(action.description)
-        desc.setProperty("role", "caption")
+        desc = QLabel(f"{action.title}: {action.description}")
+        desc.setProperty("role", "action-description")
         desc.setWordWrap(True)
-        layout.addWidget(desc)
-
-        meta = QVBoxLayout()
-        meta.setSpacing(8)
+        copy.addWidget(desc)
 
         target_text = self._target_text(action)
+        detail_bits = []
         if target_text:
-            meta.addLayout(self._meta_row("Target", target_text))
-
-        change_text = (
-            "Changes PC — confirmation required"
-            if action.requires_confirmation
-            else "Read-only — no PC changes"
+            detail_bits.append(f"Target: {target_text}")
+        detail_bits.append(
+            "Confirmation required" if action.requires_confirmation else "Read-only"
         )
-        meta.addLayout(self._meta_row("Scope", change_text))
-        meta.addLayout(self._meta_row("Expected result", self._expected_result(action)))
-        meta.addLayout(self._meta_row("Risk", action.risk))
-        layout.addLayout(meta)
+        detail_bits.append(f"Risk: {action.risk}")
+        meta = QLabel(" | ".join(detail_bits))
+        meta.setProperty("role", "action-meta-value")
+        meta.setWordWrap(True)
+        copy.addWidget(meta)
+        layout.addLayout(copy, 1)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
-        buttons.addStretch(1)
         self.cancel_btn = QPushButton(action.cancel_label)
         self.cancel_btn.setProperty("variant", "secondary")
         self.cancel_btn.clicked.connect(self._cancel)
@@ -110,7 +113,7 @@ class ActionCard(QFrame):
         self.confirm_btn.clicked.connect(self._confirm)
         buttons.addWidget(self.cancel_btn)
         buttons.addWidget(self.confirm_btn)
-        layout.addLayout(buttons)
+        layout.addLayout(buttons, 0)
 
     def _meta_row(self, label, value):
         row = QVBoxLayout()
@@ -186,34 +189,39 @@ class WelcomeState(QWidget):
         self._buttons = []
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 36, 8, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(0, 0, 0, 8)
+        layout.setSpacing(12)
 
-        title = QLabel("How can I help with this PC?")
+        title = QLabel("AI Chat")
         title.setProperty("role", "welcome-title")
-        title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
         note = QLabel(
-            "Local AI can inspect diagnostics, suggest safe tools, and ask before changing anything."
+            "Local diagnostics assistant for performance, cleanup, and startup help."
         )
         note.setProperty("role", "caption")
-        note.setAlignment(Qt.AlignCenter)
         note.setWordWrap(True)
         layout.addWidget(note)
 
         grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(10)
-        for index, (label, prompt, include_cleanup) in enumerate(quick_actions):
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(12)
+        for index, action in enumerate(quick_actions):
+            if len(action) == 4:
+                label, description, prompt, include_cleanup = action
+            else:
+                label, prompt, include_cleanup = action
+                description = ""
             button = QPushButton(label)
             button.setProperty("variant", "welcome-card")
+            button.setToolTip(description)
             button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(
                 lambda checked=False, label=label, prompt=prompt, include_cleanup=include_cleanup:
                 self.prompt_selected.emit(label, prompt, include_cleanup)
             )
-            grid.addWidget(button, index // 2, index % 2)
+            button.setText(f"{label}\n{description}")
+            grid.addWidget(button, index // 4, index % 4)
             self._buttons.append(button)
         layout.addLayout(grid)
         layout.addStretch(1)
@@ -259,24 +267,23 @@ class ChatInputDock(QFrame):
     def __init__(self):
         super().__init__()
         self.setProperty("role", "chat-input-dock")
-        self.setMaximumWidth(780)
         self._input_enabled = False
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(12)
 
         self.editor = _SubmitTextEdit()
         self.editor.setPlaceholderText(
-            "Ask about performance, cleanup, startup, display, audio, or layouts…"
+            "Ask anything about your PC..."
         )
-        self.editor.setFixedHeight(76)
+        self.editor.setFixedHeight(58)
         self.editor.installEventFilter(self)
         self.editor.textChanged.connect(self._sync_send_button)
         self.editor.submit_requested.connect(self._submit)
         layout.addWidget(self.editor, 1)
 
-        self.send_btn = QPushButton("Send")
+        self.send_btn = QPushButton("Send >")
         self.send_btn.setProperty("variant", "chat-send")
         self.send_btn.setCursor(Qt.PointingHandCursor)
         self.send_btn.clicked.connect(self._submit)
@@ -319,31 +326,43 @@ class ContextDrawer(QFrame):
     def __init__(self):
         super().__init__()
         self.setProperty("role", "context-drawer")
-        self.setFixedWidth(300)
+        self.setFixedWidth(320)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
 
         header = QHBoxLayout()
         title = QLabel("PC Context")
         title.setProperty("role", "heading")
         header.addWidget(title)
         header.addStretch(1)
-        self.refresh_btn = QPushButton("Refresh")
+        collapse = QLabel("^")
+        collapse.setProperty("role", "caption")
+        header.addWidget(collapse)
+        layout.addLayout(header)
+
+        rows_card = QFrame()
+        rows_card.setProperty("role", "context-rows")
+        rows_card_layout = QVBoxLayout(rows_card)
+        rows_card_layout.setContentsMargins(12, 10, 12, 10)
+        rows_card_layout.setSpacing(0)
+
+        self.rows_layout = QVBoxLayout()
+        self.rows_layout.setSpacing(0)
+        rows_card_layout.addLayout(self.rows_layout)
+        layout.addWidget(rows_card)
+
+        self.refresh_btn = QPushButton("Refresh Context")
         self.refresh_btn.setProperty("variant", "secondary")
         self.refresh_btn.clicked.connect(self.refresh_requested.emit)
-        header.addWidget(self.refresh_btn)
-        layout.addLayout(header)
+        layout.addWidget(self.refresh_btn)
 
         self.status_label = QLabel("Snapshot not loaded")
         self.status_label.setProperty("role", "caption")
+        self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
-
-        self.rows_layout = QVBoxLayout()
-        self.rows_layout.setSpacing(10)
-        layout.addLayout(self.rows_layout)
         layout.addStretch(1)
 
     def set_loading(self):
@@ -356,19 +375,45 @@ class ContextDrawer(QFrame):
 
     def set_snapshot(self, timestamp_text, rows):
         self.refresh_btn.setEnabled(True)
-        self.status_label.setText(f"Snapshot {timestamp_text}")
+        self.status_label.setText(f"Last updated: {timestamp_text}")
         self._clear_rows()
         for name, value in rows:
-            row = QHBoxLayout()
+            row_frame = QFrame()
+            row_frame.setProperty("role", "context-row")
+            row = QHBoxLayout(row_frame)
+            row.setContentsMargins(4, 12, 4, 12)
+            row.setSpacing(10)
             key = QLabel(name)
             key.setProperty("role", "snapshot-key")
             value_label = QLabel(value)
             value_label.setProperty("role", "caption")
             value_label.setWordWrap(True)
-            row.addWidget(key)
+            status = QLabel("")
+            status.setProperty("role", "status-dot")
+            status.setProperty("state", self._status_state(value))
+            status.setFixedSize(10, 10)
+            row.addWidget(key, 1)
             row.addStretch(1)
             row.addWidget(value_label, 2)
-            self.rows_layout.addLayout(row)
+            row.addWidget(status)
+            self.rows_layout.addWidget(row_frame)
+
+    def _status_state(self, value):
+        lowered = str(value).lower()
+        if any(word in lowered for word in ("unavailable", "failed", "warning")):
+            return "danger"
+        if "not scanned" in lowered:
+            return "warn"
+        percentages = [
+            int(part.rstrip("%"))
+            for part in lowered.split()
+            if part.endswith("%") and part.rstrip("%").isdigit()
+        ]
+        if percentages and max(percentages) >= 85:
+            return "danger"
+        if percentages and max(percentages) >= 60:
+            return "warn"
+        return "good"
 
     def _clear_rows(self):
         while self.rows_layout.count():

@@ -256,6 +256,9 @@ class AssistantTab(QWidget):
         self._model_ready = False
         self._load_started = False
         self._assistant_buffer = ""
+        self._assistant_visible_buffer = ""
+        self._stream_filter_buffer = ""
+        self._stream_filter_in_skill_block = False
         self._history = []
         self._pending_user_text = ""
         self._current_assistant_bubble = None
@@ -542,6 +545,9 @@ class AssistantTab(QWidget):
                 item.widget().deleteLater()
         self._history = []
         self._assistant_buffer = ""
+        self._assistant_visible_buffer = ""
+        self._stream_filter_buffer = ""
+        self._stream_filter_in_skill_block = False
         self._pending_user_text = ""
         self._current_assistant_bubble = None
 
@@ -561,6 +567,9 @@ class AssistantTab(QWidget):
             return
         self._add_message("user", display_text)
         self._assistant_buffer = ""
+        self._assistant_visible_buffer = ""
+        self._stream_filter_buffer = ""
+        self._stream_filter_in_skill_block = False
         self._pending_user_text = display_text
         self._current_assistant_bubble = self._add_message("assistant", "")
         self._set_input_enabled(False)
@@ -594,13 +603,69 @@ class AssistantTab(QWidget):
 
     def _on_token_received(self, token):
         self._assistant_buffer += token
-        if self._current_assistant_bubble:
-            self._current_assistant_bubble.append_text(token)
-        QTimer.singleShot(0, self._scroll_to_bottom)
+        visible_text = self._filter_streaming_skill_json(token)
+        if visible_text:
+            self._assistant_visible_buffer += visible_text
+            if self._current_assistant_bubble:
+                self._current_assistant_bubble.append_text(visible_text)
+            QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def _filter_streaming_skill_json(self, token):
+        self._stream_filter_buffer += token
+        output = []
+        while self._stream_filter_buffer:
+            if self._stream_filter_in_skill_block:
+                end = self._stream_filter_buffer.find("```")
+                if end < 0:
+                    keep = min(len(self._stream_filter_buffer), 2)
+                    self._stream_filter_buffer = self._stream_filter_buffer[-keep:] if keep else ""
+                    break
+                self._stream_filter_buffer = self._stream_filter_buffer[end + 3:]
+                self._stream_filter_in_skill_block = False
+                continue
+
+            start = self._stream_filter_buffer.find("```")
+            if start < 0:
+                safe_length = max(0, len(self._stream_filter_buffer) - 2)
+                if safe_length:
+                    output.append(self._stream_filter_buffer[:safe_length])
+                    self._stream_filter_buffer = self._stream_filter_buffer[safe_length:]
+                break
+
+            if start:
+                output.append(self._stream_filter_buffer[:start])
+                self._stream_filter_buffer = self._stream_filter_buffer[start:]
+
+            lowered = self._stream_filter_buffer.lower()
+            if lowered.startswith("```json") or lowered.startswith("```\n{") or lowered.startswith("``` {"):
+                newline = self._stream_filter_buffer.find("\n")
+                if newline < 0:
+                    break
+                self._stream_filter_buffer = self._stream_filter_buffer[newline + 1:]
+                self._stream_filter_in_skill_block = True
+                continue
+
+            if len(self._stream_filter_buffer) < 8:
+                break
+            output.append("```")
+            self._stream_filter_buffer = self._stream_filter_buffer[3:]
+
+        return "".join(output)
+
+    def _flush_stream_filter(self):
+        if self._stream_filter_in_skill_block:
+            self._stream_filter_buffer = ""
+            self._stream_filter_in_skill_block = False
+            return ""
+        text = self._stream_filter_buffer
+        self._stream_filter_buffer = ""
+        return text
 
     def _on_assistant_text_ready(self, text):
-        cleaned = text.strip() or "I found an app action that can help."
+        tail = self._flush_stream_filter()
+        cleaned = text.strip() or self._assistant_visible_buffer.strip() or tail.strip() or "I found an app action that can help."
         self._assistant_buffer = cleaned
+        self._assistant_visible_buffer = cleaned
         if self._current_assistant_bubble:
             self._current_assistant_bubble.set_text(cleaned)
         QTimer.singleShot(0, self._scroll_to_bottom)

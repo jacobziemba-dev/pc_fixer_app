@@ -1,8 +1,9 @@
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.assistant_core import AssistantSnapshot
-from app.assistant_tab import InferenceWorker
+from app.assistant_tab import AssistantTab, InferenceWorker
 
 
 class FakeEngine:
@@ -33,3 +34,25 @@ def test_inference_worker_parses_skill_actions_and_dedupes_keyword_fallback():
 
     assert [action.kind for action in actions] == ["scan_cleanup"]
     assert final_text == ["I can scan cleanup first."]
+
+
+def test_streaming_filter_hides_split_fenced_skill_json():
+    state = SimpleNamespace(
+        _stream_filter_buffer="",
+        _stream_filter_in_skill_block=False,
+    )
+    tokens = [
+        "I can scan first.\n",
+        "```",
+        "json\n",
+        '{"type":"skill_request","skill":"scan_cleanup","arguments":{}}\n',
+        "```",
+        "\nDone.",
+    ]
+
+    visible = "".join(AssistantTab._filter_streaming_skill_json(state, token) for token in tokens)
+    visible += AssistantTab._flush_stream_filter(state)
+
+    assert "skill_request" not in visible
+    assert "scan_cleanup" not in visible
+    assert visible == "I can scan first.\n\nDone."

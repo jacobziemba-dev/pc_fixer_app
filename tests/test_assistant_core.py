@@ -8,8 +8,14 @@ from app.assistant_core import (
     MEDIUM_RISK,
     READ_ONLY,
     collect_assistant_snapshot,
+    dedupe_actions,
     execute_assistant_action,
+    extract_skill_requests,
     get_assistant_tools,
+    render_skill_catalog,
+    skill_request_to_action,
+    strip_skill_requests,
+    validate_skill_request,
     propose_actions,
     render_snapshot_context,
     snapshot_summary_rows,
@@ -252,3 +258,181 @@ def test_execute_assistant_action_rejects_unsupported_action():
     assert result.success is False
     assert "Unsupported action" in result.message
     assert snapshot is not None
+
+
+def test_skill_catalog_includes_enabled_public_skills():
+    catalog = render_skill_catalog()
+
+    assert "scan_cleanup" in catalog
+    assert "set_app_volume" in catalog
+    assert "execute_assistant_action" not in catalog
+    assert "arbitrary code" in catalog
+
+
+def test_extract_skill_requests_from_fenced_and_raw_json():
+    text = (
+        "I can help.\n"
+        "```json\n{\"type\":\"skill_request\",\"skill\":\"scan_cleanup\",\"arguments\":{}}\n```\n"
+        "{\"type\":\"skill_request\",\"skill\":\"refresh_network\",\"arguments\":{}}"
+    )
+
+    requests = extract_skill_requests(text)
+
+    assert [request["skill"] for request in requests] == ["scan_cleanup", "refresh_network"]
+
+
+def test_extract_skill_requests_ignores_malformed_and_normal_text():
+    assert extract_skill_requests("hello there") == []
+    assert extract_skill_requests("```json\n{\"type\":\"skill_request\"\n```") == []
+
+
+def test_strip_skill_requests_hides_internal_json():
+    text = (
+        "I will scan first.\n"
+        "```json\n{\"type\":\"skill_request\",\"skill\":\"scan_cleanup\",\"arguments\":{}}\n```"
+    )
+
+    assert strip_skill_requests(text) == "I will scan first."
+
+
+def test_strip_skill_requests_hides_raw_internal_json():
+    text = 'I will scan first. {"type":"skill_request","skill":"scan_cleanup","arguments":{}}'
+
+    assert strip_skill_requests(text) == "I will scan first."
+
+
+def test_validate_skill_request_rejects_unknown_missing_and_wrong_type():
+    assert not validate_skill_request({"type": "skill_request", "skill": "made_up", "arguments": {}}).success
+    missing = validate_skill_request({
+        "type": "skill_request",
+        "skill": "set_app_volume",
+        "arguments": {"app": "chrome"},
+    })
+    wrong = validate_skill_request({
+        "type": "skill_request",
+        "skill": "set_app_volume",
+        "arguments": {"app": "chrome", "level": "quiet"},
+    })
+
+    assert not missing.success
+    assert "Missing required argument: level" in missing.message
+    assert not wrong.success
+    assert "level" in wrong.message
+
+
+def test_skill_request_to_action_for_cleanup_scan():
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "scan_cleanup",
+        "arguments": {},
+    }, AssistantSnapshot(datetime.now()))
+
+    assert message == ""
+    assert action.kind == "scan_cleanup"
+    assert action.risk == READ_ONLY
+
+
+def test_skill_request_to_action_for_cleanup_clean_uses_scanned_categories():
+    snapshot = AssistantSnapshot(
+        timestamp=datetime.now(),
+        cleanup_categories=[_cleanup_category("user_temp", size=2048)],
+    )
+
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "clean_scanned_cleanup",
+        "arguments": {},
+    }, snapshot)
+
+    assert message == ""
+    assert action.kind == "clean_cleanup_candidates"
+    assert action.requires_confirmation is True
+    assert action.payload == {"category_keys": ["user_temp"]}
+
+
+def test_skill_request_to_action_for_display_refresh_by_label():
+    snapshot = AssistantSnapshot(
+        timestamp=datetime.now(),
+        displays=[{
+            "name": r"\\.\DISPLAY1",
+            "label": "Dell Gaming",
+            "primary": True,
+            "supported_rates": [60, 144],
+        }],
+    )
+
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "set_display_refresh_rate",
+        "arguments": {"display_label": "dell", "hz": 144},
+    }, snapshot)
+
+    assert message == ""
+    assert action.kind == "set_display_refresh_rate"
+    assert action.payload == {"device_name": r"\\.\DISPLAY1", "hz": 144}
+
+
+def test_skill_request_to_action_rejects_ambiguous_audio_target():
+    snapshot = AssistantSnapshot(
+        timestamp=datetime.now(),
+        audio_sessions=[
+            {"pid": 1, "process_name": "chrome.exe", "display_name": "Chrome One"},
+            {"pid": 2, "process_name": "chrome.exe", "display_name": "Chrome Two"},
+        ],
+    )
+
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "set_app_volume",
+        "arguments": {"app": "chrome", "level": 0.2},
+    }, snapshot)
+
+    assert action is None
+    assert "More than one" in message
+
+
+def test_skill_request_to_action_for_audio_volume_mute_route_and_layout():
+    snapshot = AssistantSnapshot(
+        timestamp=datetime.now(),
+        audio_devices=[{"id": "dev-1", "name": "Speakers"}],
+        audio_sessions=[{"pid": 12, "process_name": "music.exe", "display_name": "Music"}],
+        saved_layouts=[{"id": "layout-1", "name": "Work", "windows": 2, "displays": 1}],
+    )
+
+    volume, _ = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "set_app_volume",
+        "arguments": {"app": "music", "level": 0.4},
+    }, snapshot)
+    mute, _ = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "mute_app_audio",
+        "arguments": {"app": "music", "muted": True},
+    }, snapshot)
+    route, _ = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "route_app_audio",
+        "arguments": {"app": "music", "device_name": "speaker"},
+    }, snapshot)
+    layout, _ = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "load_saved_layout",
+        "arguments": {"layout_name": "work"},
+    }, snapshot)
+
+    assert volume.kind == "audio_set_volume"
+    assert volume.payload == {"pid": 12, "level": 0.4}
+    assert mute.kind == "audio_mute_session"
+    assert mute.payload == {"pid": 12, "muted": True}
+    assert route.kind == "audio_route_session"
+    assert route.payload == {"pid": 12, "process_name": "music.exe", "device_id": "dev-1"}
+    assert layout.kind == "load_saved_layout"
+    assert layout.payload == {"layout_id": "layout-1"}
+
+
+def test_dedupe_actions_uses_kind_and_payload():
+    first = AssistantAction("1", "refresh_network", "A", "A", READ_ONLY, payload={})
+    duplicate = AssistantAction("2", "refresh_network", "B", "B", READ_ONLY, payload={})
+    other = AssistantAction("3", "refresh_network", "C", "C", READ_ONLY, payload={"x": 1})
+
+    assert dedupe_actions([first, duplicate, other]) == [first, other]

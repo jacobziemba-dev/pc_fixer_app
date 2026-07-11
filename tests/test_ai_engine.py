@@ -13,6 +13,7 @@ from app.ai_engine import (
     EmbeddedAI,
     MODELS_DIR,
     SNAPSHOT_UNAVAILABLE,
+    build_skill_catalog,
     build_system_context,
     compose_user_prompt,
     format_chat_history,
@@ -194,6 +195,22 @@ def test_compose_user_prompt_with_context():
     assert "System snapshot:" in result
     assert "CPU: 90%" in result
     assert "User question: Why is it slow?" in result
+
+
+def test_compose_user_prompt_with_skill_catalog():
+    result = compose_user_prompt("Clean junk?", "CPU: 10%", skill_catalog="Available assistant skills:\n- scan_cleanup")
+
+    assert "System snapshot:" in result
+    assert "Available assistant skills:" in result
+    assert "scan_cleanup" in result
+    assert "User question: Clean junk?" in result
+
+
+def test_build_skill_catalog_mentions_skill_request_shape():
+    catalog = build_skill_catalog()
+
+    assert "skill_request" in catalog
+    assert "scan_cleanup" in catalog
 
 
 def test_compose_user_prompt_without_context():

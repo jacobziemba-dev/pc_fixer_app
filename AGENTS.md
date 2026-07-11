@@ -56,3 +56,9 @@ Pull requests should include a brief description, test notes, and screenshots or
 ## Security & Configuration Tips
 
 Treat cleanup and system-inspection code carefully. Do not expand deletion targets without clear labels, conservative defaults, and user confirmation. Keep local virtual environments, caches, and generated files out of version control.
+
+## Assistant Skills Documentation
+
+`skills_list.md` documents every LLM-requestable assistant skill, what action it maps to, its risk level, confirmation behavior, and accepted friendly arguments. Whenever adding, removing, renaming, disabling, or changing behavior for skills in `app/assistant_core.py` (`ASSISTANT_SKILLS`, `ASSISTANT_TOOLS`, skill validation, or skill-to-action conversion), update `skills_list.md` in the same change.
+
+Keep this documentation conservative and safety-focused. Any system-changing skill must clearly say that it requires user confirmation, and no skill documentation should imply that the LLM can run arbitrary shell commands, arbitrary Python, registry edits, unrestricted PowerShell, or arbitrary file deletion.

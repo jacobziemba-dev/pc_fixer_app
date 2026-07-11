@@ -15,6 +15,7 @@ from app.ai_engine import (
     HEALTH_CHECK_PROMPT,
     SLOW_PC_PROMPT,
     STARTUP_REVIEW_PROMPT,
+    build_skill_catalog,
     build_system_snapshot,
     compose_user_prompt,
     missing_model_message,
@@ -28,9 +29,12 @@ from app.assistant_core import (
     AssistantTurn,
     TAB_ACTION_KINDS,
     collect_assistant_snapshot,
+    merge_action_lists,
     execute_assistant_action,
     propose_actions,
+    skill_requests_to_actions,
     snapshot_summary_rows,
+    strip_skill_requests,
 )
 
 
@@ -89,6 +93,8 @@ class InferenceWorker(QThread):
     token_received = Signal(str)
     snapshot_ready = Signal(object)
     actions_ready = Signal(list)
+    assistant_text_ready = Signal(str)
+    skill_messages_ready = Signal(list)
     inference_complete = Signal()
     cancelled = Signal()
     error = Signal(str)
@@ -119,13 +125,26 @@ class InferenceWorker(QThread):
             snapshot = build_system_snapshot(include_cleanup=self._include_cleanup)
             self.snapshot_ready.emit(snapshot)
             context = render_snapshot_context(snapshot)
-            prompt = compose_user_prompt(self._user_prompt, context, self._history)
-            actions = propose_actions(self._display_text, snapshot)
+            prompt = compose_user_prompt(
+                self._user_prompt,
+                context,
+                self._history,
+                skill_catalog=build_skill_catalog(),
+            )
+            assistant_text = ""
             for token in self._engine.stream_query(self._system_prompt, prompt):
                 if self._stop_requested:
                     self.cancelled.emit()
                     return
+                assistant_text += token
                 self.token_received.emit(token)
+            cleaned_answer = strip_skill_requests(assistant_text)
+            self.assistant_text_ready.emit(cleaned_answer)
+            parsed_actions, parse_messages = skill_requests_to_actions(assistant_text, snapshot)
+            fallback_actions = propose_actions(self._display_text, snapshot)
+            actions = merge_action_lists(parsed_actions, fallback_actions)
+            if parse_messages:
+                self.skill_messages_ready.emit(parse_messages)
             self.actions_ready.emit(actions)
             self.inference_complete.emit()
         except AIEngineError as exc:
@@ -168,6 +187,9 @@ class MessageBubble(QFrame):
 
     def append_text(self, text):
         self.text_label.setText(self.text_label.text() + text)
+
+    def set_text(self, text):
+        self.text_label.setText(text)
 
     def text(self):
         return self.text_label.text()
@@ -555,6 +577,8 @@ class AssistantTab(QWidget):
         )
         self._infer_worker.token_received.connect(self._on_token_received)
         self._infer_worker.snapshot_ready.connect(self._on_snapshot_ready)
+        self._infer_worker.assistant_text_ready.connect(self._on_assistant_text_ready)
+        self._infer_worker.skill_messages_ready.connect(self._on_skill_messages_ready)
         self._infer_worker.actions_ready.connect(self._add_action_cards)
         self._infer_worker.inference_complete.connect(self._on_inference_finished)
         self._infer_worker.cancelled.connect(self._on_inference_cancelled)
@@ -573,6 +597,17 @@ class AssistantTab(QWidget):
         if self._current_assistant_bubble:
             self._current_assistant_bubble.append_text(token)
         QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def _on_assistant_text_ready(self, text):
+        cleaned = text.strip() or "I found an app action that can help."
+        self._assistant_buffer = cleaned
+        if self._current_assistant_bubble:
+            self._current_assistant_bubble.set_text(cleaned)
+        QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def _on_skill_messages_ready(self, messages):
+        for message in messages[:4]:
+            self._add_message("system", f"Skill request skipped: {message}")
 
     def _on_inference_finished(self):
         answer = self._assistant_buffer.strip()

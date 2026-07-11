@@ -1,3 +1,4 @@
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -66,6 +67,24 @@ class AssistantTool:
     payload_schema: dict = field(default_factory=dict)
     confirm_label: str = "Run"
     keywords: tuple = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class AssistantSkill:
+    name: str
+    description: str
+    input_schema: dict
+    risk: str
+    requires_confirmation: bool
+    action_kind: str
+    examples: tuple = field(default_factory=tuple)
+    enabled: bool = True
+
+
+@dataclass
+class SkillValidationResult:
+    success: bool
+    message: str = ""
 
 
 READ_ONLY = "Read-only"
@@ -202,6 +221,133 @@ ASSISTANT_TOOLS = {
     ),
 }
 
+ASSISTANT_SKILLS = {
+    "diagnose_pc_health": AssistantSkill(
+        "diagnose_pc_health",
+        "Refresh the PC snapshot and summarize overall health.",
+        {},
+        ASSISTANT_TOOLS["refresh_snapshot"].risk,
+        ASSISTANT_TOOLS["refresh_snapshot"].requires_confirmation,
+        "refresh_snapshot",
+        examples=({"type": "skill_request", "skill": "diagnose_pc_health", "arguments": {}},),
+    ),
+    "inspect_top_processes": AssistantSkill(
+        "inspect_top_processes",
+        "Refresh the top CPU and RAM process lists.",
+        {},
+        ASSISTANT_TOOLS["inspect_top_processes"].risk,
+        ASSISTANT_TOOLS["inspect_top_processes"].requires_confirmation,
+        "inspect_top_processes",
+    ),
+    "refresh_network": AssistantSkill(
+        "refresh_network",
+        "Refresh network sent/received counters.",
+        {},
+        ASSISTANT_TOOLS["refresh_network"].risk,
+        ASSISTANT_TOOLS["refresh_network"].requires_confirmation,
+        "refresh_network",
+    ),
+    "refresh_hardware": AssistantSkill(
+        "refresh_hardware",
+        "Refresh the hardware summary.",
+        {},
+        ASSISTANT_TOOLS["refresh_hardware"].risk,
+        ASSISTANT_TOOLS["refresh_hardware"].requires_confirmation,
+        "refresh_hardware",
+    ),
+    "refresh_startup_programs": AssistantSkill(
+        "refresh_startup_programs",
+        "Refresh startup items and installed-program summary.",
+        {},
+        ASSISTANT_TOOLS["refresh_startup"].risk,
+        ASSISTANT_TOOLS["refresh_startup"].requires_confirmation,
+        "refresh_startup",
+    ),
+    "scan_cleanup": AssistantSkill(
+        "scan_cleanup",
+        "Scan safe cleanup locations before any deletion.",
+        {},
+        ASSISTANT_TOOLS["scan_cleanup"].risk,
+        ASSISTANT_TOOLS["scan_cleanup"].requires_confirmation,
+        "scan_cleanup",
+        examples=({"type": "skill_request", "skill": "scan_cleanup", "arguments": {}},),
+    ),
+    "clean_scanned_cleanup": AssistantSkill(
+        "clean_scanned_cleanup",
+        "Clean cleanup categories that were already scanned.",
+        {"category_keys": "list[str]?"},
+        ASSISTANT_TOOLS["clean_cleanup_candidates"].risk,
+        ASSISTANT_TOOLS["clean_cleanup_candidates"].requires_confirmation,
+        "clean_cleanup_candidates",
+    ),
+    "refresh_displays": AssistantSkill(
+        "refresh_displays",
+        "Refresh connected display information.",
+        {},
+        ASSISTANT_TOOLS["refresh_displays"].risk,
+        ASSISTANT_TOOLS["refresh_displays"].requires_confirmation,
+        "refresh_displays",
+    ),
+    "set_display_refresh_rate": AssistantSkill(
+        "set_display_refresh_rate",
+        "Change a display refresh rate after Python resolves a display target.",
+        {"hz": "int", "device_name": "str?", "display_label": "str?"},
+        ASSISTANT_TOOLS["set_display_refresh_rate"].risk,
+        ASSISTANT_TOOLS["set_display_refresh_rate"].requires_confirmation,
+        "set_display_refresh_rate",
+        examples=({"type": "skill_request", "skill": "set_display_refresh_rate", "arguments": {"display_label": "Dell", "hz": 144}},),
+    ),
+    "refresh_audio": AssistantSkill(
+        "refresh_audio",
+        "Refresh playback devices and active app audio sessions.",
+        {},
+        ASSISTANT_TOOLS["refresh_audio"].risk,
+        ASSISTANT_TOOLS["refresh_audio"].requires_confirmation,
+        "refresh_audio",
+    ),
+    "set_app_volume": AssistantSkill(
+        "set_app_volume",
+        "Set one app audio session volume after Python resolves the app target.",
+        {"level": "float", "pid": "int?", "process_name": "str?", "app": "str?"},
+        ASSISTANT_TOOLS["audio_set_volume"].risk,
+        ASSISTANT_TOOLS["audio_set_volume"].requires_confirmation,
+        "audio_set_volume",
+        examples=({"type": "skill_request", "skill": "set_app_volume", "arguments": {"app": "chrome", "level": 0.35}},),
+    ),
+    "mute_app_audio": AssistantSkill(
+        "mute_app_audio",
+        "Mute or unmute one app audio session after Python resolves the app target.",
+        {"muted": "bool", "pid": "int?", "process_name": "str?", "app": "str?"},
+        ASSISTANT_TOOLS["audio_mute_session"].risk,
+        ASSISTANT_TOOLS["audio_mute_session"].requires_confirmation,
+        "audio_mute_session",
+    ),
+    "route_app_audio": AssistantSkill(
+        "route_app_audio",
+        "Route one app audio session to a playback device after Python resolves both targets.",
+        {"pid": "int?", "process_name": "str?", "app": "str?", "device_id": "str?", "device_name": "str?"},
+        ASSISTANT_TOOLS["audio_route_session"].risk,
+        ASSISTANT_TOOLS["audio_route_session"].requires_confirmation,
+        "audio_route_session",
+    ),
+    "refresh_layouts": AssistantSkill(
+        "refresh_layouts",
+        "Refresh current windows and saved layouts.",
+        {},
+        ASSISTANT_TOOLS["refresh_layouts"].risk,
+        ASSISTANT_TOOLS["refresh_layouts"].requires_confirmation,
+        "refresh_layouts",
+    ),
+    "load_saved_layout": AssistantSkill(
+        "load_saved_layout",
+        "Load a saved window layout after Python resolves the layout target.",
+        {"layout_id": "str?", "layout_name": "str?"},
+        ASSISTANT_TOOLS["load_saved_layout"].risk,
+        ASSISTANT_TOOLS["load_saved_layout"].requires_confirmation,
+        "load_saved_layout",
+    ),
+}
+
 TAB_ACTION_KINDS = {
     kind
     for kind, tool in ASSISTANT_TOOLS.items()
@@ -230,6 +376,29 @@ def _action(kind, title=None, description=None, risk=None, payload=None, confirm
 
 def get_assistant_tools():
     return dict(ASSISTANT_TOOLS)
+
+
+def get_assistant_skills():
+    return dict(ASSISTANT_SKILLS)
+
+
+def render_skill_catalog():
+    lines = [
+        "Available assistant skills:",
+        "When useful, include one or more fenced JSON skill requests exactly like:",
+        '```json\n{"type":"skill_request","skill":"scan_cleanup","arguments":{}}\n```',
+        "Never invent skills. Never request shell commands, arbitrary code, registry edits, or arbitrary file deletion.",
+    ]
+    for skill in ASSISTANT_SKILLS.values():
+        if not skill.enabled:
+            continue
+        args = ", ".join(f"{name}: {kind}" for name, kind in skill.input_schema.items()) or "none"
+        confirmation = "confirmation required" if skill.requires_confirmation else "read-only action card"
+        lines.append(
+            f"- {skill.name}: {skill.description} Args: {args}. "
+            f"Risk: {skill.risk}; {confirmation}."
+        )
+    return "\n".join(lines)
 
 
 def collect_assistant_snapshot(include_cleanup=False):
@@ -766,6 +935,335 @@ def _layout_action(lowered, snapshot):
         description=f"Load saved layout \"{layout['name']}\".",
         payload={"layout_id": layout["id"]},
     )
+
+
+def extract_skill_requests(text):
+    requests = []
+    seen_spans = []
+
+    for match in re.finditer(r"```(?:json)?\s*(.*?)```", text or "", re.IGNORECASE | re.DOTALL):
+        seen_spans.append(match.span())
+        requests.extend(_skill_requests_from_json_text(match.group(1)))
+
+    decoder = json.JSONDecoder()
+    index = 0
+    text = text or ""
+    while index < len(text):
+        if any(start <= index < end for start, end in seen_spans):
+            index += 1
+            continue
+        if text[index] != "{":
+            index += 1
+            continue
+        try:
+            value, end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            index += 1
+            continue
+        requests.extend(_skill_requests_from_value(value))
+        index += max(end, 1)
+
+    return requests
+
+
+def _skill_requests_from_json_text(text):
+    try:
+        value = json.loads((text or "").strip())
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return _skill_requests_from_value(value)
+
+
+def _skill_requests_from_value(value):
+    if isinstance(value, dict) and value.get("type") == "skill_request":
+        return [value]
+    if isinstance(value, list):
+        requests = []
+        for item in value:
+            requests.extend(_skill_requests_from_value(item))
+        return requests
+    return []
+
+
+def strip_skill_requests(text):
+    def replace_fenced(match):
+        requests = _skill_requests_from_json_text(match.group(1))
+        return "" if requests else match.group(0)
+
+    stripped = re.sub(r"```(?:json)?\s*(.*?)```", replace_fenced, text or "", flags=re.IGNORECASE | re.DOTALL)
+    stripped = _strip_raw_skill_json(stripped)
+    if _looks_like_only_skill_json(stripped):
+        stripped = ""
+    return re.sub(r"\n{3,}", "\n\n", stripped).strip()
+
+
+def _strip_raw_skill_json(text):
+    decoder = json.JSONDecoder()
+    spans = []
+    index = 0
+    text = text or ""
+    while index < len(text):
+        if text[index] != "{":
+            index += 1
+            continue
+        try:
+            value, end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            index += 1
+            continue
+        if _skill_requests_from_value(value):
+            spans.append((index, index + end))
+        index += max(end, 1)
+    if not spans:
+        return text
+    parts = []
+    last = 0
+    for start, end in spans:
+        parts.append(text[last:start])
+        last = end
+    parts.append(text[last:])
+    return "".join(parts)
+
+
+def _looks_like_only_skill_json(text):
+    compact = (text or "").strip()
+    if not compact:
+        return False
+    try:
+        value = json.loads(compact)
+    except json.JSONDecodeError:
+        return False
+    return bool(_skill_requests_from_value(value))
+
+
+def validate_skill_request(request, snapshot=None):
+    if not isinstance(request, dict):
+        return SkillValidationResult(False, "Skill request was not an object.")
+    if request.get("type") != "skill_request":
+        return SkillValidationResult(False, "Skill request type was not skill_request.")
+    name = request.get("skill")
+    skill = ASSISTANT_SKILLS.get(name)
+    if not skill:
+        return SkillValidationResult(False, f"Unknown skill: {name or 'missing'}.")
+    if not skill.enabled:
+        return SkillValidationResult(False, f"Skill is disabled: {name}.")
+    arguments = request.get("arguments", {})
+    if not isinstance(arguments, dict):
+        return SkillValidationResult(False, f"Arguments for {name} must be an object.")
+
+    for field_name, expected in skill.input_schema.items():
+        optional = str(expected).endswith("?")
+        base_type = str(expected).rstrip("?")
+        if field_name not in arguments:
+            if optional:
+                continue
+            return SkillValidationResult(False, f"Missing required argument: {field_name}.")
+        if not _value_matches_schema(arguments[field_name], base_type):
+            return SkillValidationResult(False, f"Argument {field_name} must be {base_type}.")
+
+    if name == "clean_scanned_cleanup" and not getattr(snapshot, "cleanup_categories", None):
+        return SkillValidationResult(False, "Run a cleanup scan before cleaning.")
+
+    return SkillValidationResult(True)
+
+
+def _value_matches_schema(value, expected):
+    if expected == "str":
+        return isinstance(value, str)
+    if expected == "int":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "float":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected == "bool":
+        return isinstance(value, bool)
+    if expected == "list[str]":
+        return isinstance(value, list) and all(isinstance(item, str) for item in value)
+    return True
+
+
+def skill_request_to_action(request, snapshot=None):
+    validation = validate_skill_request(request, snapshot)
+    if not validation.success:
+        return None, validation.message
+
+    skill = ASSISTANT_SKILLS[request["skill"]]
+    args = dict(request.get("arguments") or {})
+    kind = skill.action_kind
+
+    if kind == "clean_cleanup_candidates":
+        keys = args.get("category_keys")
+        if not keys and snapshot:
+            keys = [cat.key for cat in snapshot.cleanup_categories]
+        if not keys:
+            return None, "No scanned cleanup categories are available."
+        categories = [
+            cat for cat in (snapshot.cleanup_categories if snapshot else [])
+            if cat.key in set(keys)
+        ]
+        if not categories:
+            return None, "No matching cleanup categories are available."
+        total = sum(cat.size_bytes for cat in categories)
+        return _action(
+            kind,
+            description=f"Delete scanned cleanup categories ({sysinfo.format_bytes(total)}).",
+            payload={"category_keys": [cat.key for cat in categories]},
+        ), ""
+
+    if kind == "set_display_refresh_rate":
+        display, message = _resolve_display(args, snapshot)
+        if not display:
+            return None, message
+        hz = int(args["hz"])
+        supported = display.get("supported_rates") or []
+        if supported and hz not in [int(rate) for rate in supported]:
+            return None, f"{hz} Hz is not listed as supported for {display.get('label', 'that display')}."
+        return _action(
+            kind,
+            description=f"Change {display.get('label', display['name'])} to {hz} Hz.",
+            payload={"device_name": display["name"], "hz": hz},
+        ), ""
+
+    if kind in {"audio_set_volume", "audio_mute_session", "audio_route_session"}:
+        session, message = _resolve_audio_session(args, snapshot)
+        if not session:
+            return None, message
+        payload = {"pid": session["pid"]}
+        if kind == "audio_set_volume":
+            level = max(0.0, min(1.0, float(args["level"])))
+            payload["level"] = level
+            description = f"Set {session['display_name']} volume to {int(level * 100)}%."
+        elif kind == "audio_mute_session":
+            muted = bool(args["muted"])
+            payload["muted"] = muted
+            description = f"{'Mute' if muted else 'Unmute'} {session['display_name']}."
+        else:
+            device, message = _resolve_audio_device(args, snapshot)
+            if not device:
+                return None, message
+            payload.update({
+                "process_name": session.get("process_name", ""),
+                "device_id": device["id"],
+            })
+            description = f"Route {session['display_name']} to {device['name']}."
+        return _action(kind, description=description, payload=payload), ""
+
+    if kind == "load_saved_layout":
+        layout, message = _resolve_layout(args, snapshot)
+        if not layout:
+            return None, message
+        return _action(
+            kind,
+            description=f"Load saved layout \"{layout['name']}\".",
+            payload={"layout_id": layout["id"]},
+        ), ""
+
+    return _action(kind, payload={}), ""
+
+
+def skill_requests_to_actions(text, snapshot=None):
+    actions = []
+    messages = []
+    for request in extract_skill_requests(text):
+        action, message = skill_request_to_action(request, snapshot)
+        if action:
+            actions.append(action)
+        elif message:
+            messages.append(message)
+    return dedupe_actions(actions), messages
+
+
+def dedupe_actions(actions):
+    deduped = []
+    seen = set()
+    for action in actions:
+        key = (action.kind, json.dumps(action.payload, sort_keys=True, default=str))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(action)
+    return deduped
+
+
+def merge_action_lists(*action_lists):
+    merged = []
+    for actions in action_lists:
+        merged.extend(actions or [])
+    return dedupe_actions(merged)
+
+
+def _resolve_display(args, snapshot):
+    displays = getattr(snapshot, "displays", []) if snapshot else []
+    if not displays:
+        return None, "Refresh display information before changing a refresh rate."
+    if args.get("device_name"):
+        matches = [display for display in displays if display.get("name") == args["device_name"]]
+    elif args.get("display_label"):
+        needle = str(args["display_label"]).lower()
+        matches = [display for display in displays if needle in str(display.get("label", "")).lower()]
+    else:
+        matches = [display for display in displays if display.get("primary")] or displays
+    return _single_match(matches, "display")
+
+
+def _resolve_audio_session(args, snapshot):
+    sessions = getattr(snapshot, "audio_sessions", []) if snapshot else []
+    if not sessions:
+        return None, "Refresh audio information before changing app audio."
+    if args.get("pid"):
+        matches = [session for session in sessions if int(session.get("pid", 0)) == int(args["pid"])]
+    else:
+        needle = str(args.get("process_name") or args.get("app") or "").lower()
+        if not needle and len(sessions) == 1:
+            matches = sessions
+        else:
+            matches = [
+                session for session in sessions
+                if needle
+                and (
+                    needle in str(session.get("process_name", "")).lower()
+                    or needle in str(session.get("display_name", "")).lower()
+                )
+            ]
+    return _single_match(matches, "audio session")
+
+
+def _resolve_audio_device(args, snapshot):
+    devices = getattr(snapshot, "audio_devices", []) if snapshot else []
+    if not devices:
+        return None, "Refresh audio information before routing app audio."
+    if args.get("device_id"):
+        matches = [device for device in devices if device.get("id") == args["device_id"]]
+    else:
+        needle = str(args.get("device_name") or "").lower()
+        if not needle and len(devices) == 1:
+            matches = devices
+        else:
+            matches = [device for device in devices if needle and needle in str(device.get("name", "")).lower()]
+    return _single_match(matches, "audio device")
+
+
+def _resolve_layout(args, snapshot):
+    layouts = getattr(snapshot, "saved_layouts", []) if snapshot else []
+    if not layouts:
+        return None, "Refresh layouts before loading a saved layout."
+    if args.get("layout_id"):
+        matches = [layout for layout in layouts if layout.get("id") == args["layout_id"]]
+    elif args.get("layout_name"):
+        needle = str(args["layout_name"]).lower()
+        matches = [layout for layout in layouts if needle in str(layout.get("name", "")).lower()]
+    elif len(layouts) == 1:
+        matches = layouts
+    else:
+        matches = []
+    return _single_match(matches, "saved layout")
+
+
+def _single_match(matches, label):
+    if len(matches) == 1:
+        return matches[0], ""
+    if not matches:
+        return None, f"No matching {label} was found."
+    return None, f"More than one matching {label} was found; be more specific."
 
 
 def execute_assistant_action(action, snapshot=None):

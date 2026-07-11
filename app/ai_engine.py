@@ -6,6 +6,7 @@ from app.assistant_core import (
     AssistantTurn,
     collect_assistant_snapshot,
     render_snapshot_context,
+    render_skill_catalog,
     snapshot_has_useful_data,
 )
 
@@ -16,7 +17,9 @@ DEFAULT_SYSTEM_PROMPT = (
     "Use the system snapshot provided with each question. "
     "Use recent conversation only for continuity, not as hardware facts. "
     "Answer in 2-4 short sentences with practical advice. "
-    "Do not invent hardware details that are not in the snapshot."
+    "Do not invent hardware details that are not in the snapshot. "
+    "When an app action would help, you may include fenced JSON skill requests. "
+    "The app validates every request and requires confirmation for PC-changing actions."
 )
 HEALTH_CHECK_PROMPT = (
     "Summarize my PC health and suggest the top 1-2 things I should check."
@@ -102,10 +105,13 @@ def format_chat_history(history, max_turns=MAX_HISTORY_TURNS):
     return "\n".join(lines)
 
 
-def compose_user_prompt(user_text, context=None, history=None):
+def compose_user_prompt(user_text, context=None, history=None, skill_catalog=None):
     sections = []
     if context:
         sections.append(f"System snapshot:\n{context}")
+
+    if skill_catalog:
+        sections.append(skill_catalog)
 
     history_text = format_chat_history(history)
     if history_text:
@@ -152,6 +158,10 @@ def build_system_context(include_cleanup=False):
     if not snapshot_has_useful_data(snapshot):
         return SNAPSHOT_UNAVAILABLE
     return render_snapshot_context(snapshot)
+
+
+def build_skill_catalog():
+    return render_skill_catalog()
 
 
 class EmbeddedAI:

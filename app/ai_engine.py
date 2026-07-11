@@ -65,7 +65,6 @@ def missing_model_message(path=None):
 def format_chat_prompt(system_prompt, user_prompt):
     """Format a prompt using the Llama 3.2 Instruct chat template."""
     return (
-        "<|begin_of_text|>"
         "<|start_header_id|>system<|end_header_id|>\n\n"
         f"{system_prompt}<|eot_id|>"
         "<|start_header_id|>user<|end_header_id|>\n\n"

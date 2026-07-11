@@ -122,7 +122,12 @@ class LayoutPreviewCanvas(QWidget):
 
         detail_font = painter.font()
         detail_font.setWeight(QFont.Normal)
-        detail_font.setPointSize(max(detail_font.pointSize() - 1, 8))
+        if detail_font.pointSize() > 0:
+            detail_font.setPointSize(max(detail_font.pointSize() - 1, 8))
+        elif detail_font.pixelSize() > 0:
+            detail_font.setPixelSize(max(detail_font.pixelSize() - 1, 10))
+        else:
+            detail_font.setPointSize(8)
         painter.setFont(detail_font)
         detail_metrics = QFontMetrics(detail_font)
         details = []

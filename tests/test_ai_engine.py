@@ -33,7 +33,6 @@ def test_resolve_model_path_uses_project_models_dir():
 def test_format_chat_prompt_uses_llama32_template():
     prompt = format_chat_prompt("System text", "User text")
     assert prompt == (
-        "<|begin_of_text|>"
         "<|start_header_id|>system<|end_header_id|>\n\n"
         "System text<|eot_id|>"
         "<|start_header_id|>user<|end_header_id|>\n\n"

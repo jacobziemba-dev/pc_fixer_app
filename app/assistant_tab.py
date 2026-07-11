@@ -204,10 +204,11 @@ class AssistantTab(QWidget):
         self._current_snapshot = None
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 12, 12, 12)
-        outer.setSpacing(8)
+        outer.setContentsMargins(16, 14, 16, 14)
+        outer.setSpacing(10)
 
         header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(4, 0, 4, 0)
         title = QLabel("AI Chat")
         title.setProperty("role", "heading")
         header_layout.addWidget(title)
@@ -254,8 +255,8 @@ class AssistantTab(QWidget):
         self.scroll.setProperty("role", "chat-scroll")
         self.feed = QWidget()
         self.feed_layout = QVBoxLayout(self.feed)
-        self.feed_layout.setContentsMargins(8, 8, 8, 8)
-        self.feed_layout.setSpacing(10)
+        self.feed_layout.setContentsMargins(10, 12, 10, 12)
+        self.feed_layout.setSpacing(12)
 
         self.welcome_state = WelcomeState(QUICK_ACTIONS)
         self.welcome_state.prompt_selected.connect(self._start_inference)
@@ -267,7 +268,7 @@ class AssistantTab(QWidget):
         self.messages_widget = QWidget()
         self.messages_layout = QVBoxLayout(self.messages_widget)
         self.messages_layout.setContentsMargins(0, 0, 0, 0)
-        self.messages_layout.setSpacing(10)
+        self.messages_layout.setSpacing(12)
         self.feed_layout.addWidget(self.messages_widget)
         self.feed_layout.addStretch(1)
         self.scroll.setWidget(self.feed)
@@ -281,9 +282,14 @@ class AssistantTab(QWidget):
         body_layout.addStretch(1)
         outer.addLayout(body_layout, 1)
 
+        dock_row = QHBoxLayout()
+        dock_row.setContentsMargins(8, 4, 8, 2)
+        dock_row.addStretch(1)
         self.input_dock = ChatInputDock()
         self.input_dock.submitted.connect(self._send_message_text)
-        outer.addWidget(self.input_dock)
+        dock_row.addWidget(self.input_dock, 2)
+        dock_row.addStretch(1)
+        outer.addLayout(dock_row)
 
         self._refresh_snapshot(False)
         if not model_exists():
@@ -302,7 +308,8 @@ class AssistantTab(QWidget):
         panel = QFrame()
         panel.setProperty("role", "missing-model")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
         title = QLabel("Model not found")
         title.setProperty("role", "action-title")
         layout.addWidget(title)

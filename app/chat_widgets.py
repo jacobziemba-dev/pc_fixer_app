@@ -21,7 +21,8 @@ class MessageBubble(QFrame):
         self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(0)
         self.text_label = QLabel(text)
         self.text_label.setWordWrap(True)
         self.text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -42,7 +43,7 @@ class ChatMessageRow(QWidget):
         super().__init__()
         self.setProperty("role", "chat-message-row")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 2, 0, 2)
 
         self.bubble = MessageBubble(role, text)
         if role == "user":
@@ -68,7 +69,8 @@ class ActionCard(QFrame):
         self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
 
         title = QLabel(action.title)
         title.setProperty("role", "action-title")
@@ -80,42 +82,47 @@ class ActionCard(QFrame):
         desc.setWordWrap(True)
         layout.addWidget(desc)
 
+        meta = QVBoxLayout()
+        meta.setSpacing(8)
+
         target_text = self._target_text(action)
         if target_text:
-            target = QLabel(f"Target: {target_text}")
-            target.setProperty("role", "caption")
-            target.setWordWrap(True)
-            layout.addWidget(target)
+            meta.addLayout(self._meta_row("Target", target_text))
 
         change_text = (
-            "Changes PC: yes, confirmation required"
+            "Changes PC — confirmation required"
             if action.requires_confirmation
-            else "Changes PC: no, read-only"
+            else "Read-only — no PC changes"
         )
-        change = QLabel(change_text)
-        change.setProperty("role", "caption")
-        change.setWordWrap(True)
-        layout.addWidget(change)
-
-        expected = QLabel(f"Expected result: {self._expected_result(action)}")
-        expected.setProperty("role", "caption")
-        expected.setWordWrap(True)
-        layout.addWidget(expected)
-
-        risk = QLabel(f"Risk: {action.risk}")
-        risk.setProperty("role", "caption")
-        layout.addWidget(risk)
+        meta.addLayout(self._meta_row("Scope", change_text))
+        meta.addLayout(self._meta_row("Expected result", self._expected_result(action)))
+        meta.addLayout(self._meta_row("Risk", action.risk))
+        layout.addLayout(meta)
 
         buttons = QHBoxLayout()
+        buttons.setSpacing(8)
         buttons.addStretch(1)
         self.cancel_btn = QPushButton(action.cancel_label)
         self.cancel_btn.setProperty("variant", "secondary")
         self.cancel_btn.clicked.connect(self._cancel)
         self.confirm_btn = QPushButton(action.confirm_label)
+        self.confirm_btn.setProperty("variant", "action-confirm")
         self.confirm_btn.clicked.connect(self._confirm)
         buttons.addWidget(self.cancel_btn)
         buttons.addWidget(self.confirm_btn)
         layout.addLayout(buttons)
+
+    def _meta_row(self, label, value):
+        row = QVBoxLayout()
+        row.setSpacing(2)
+        key = QLabel(label.upper())
+        key.setProperty("role", "action-meta-label")
+        val = QLabel(value)
+        val.setProperty("role", "action-meta-value")
+        val.setWordWrap(True)
+        row.addWidget(key)
+        row.addWidget(val)
+        return row
 
     def _confirm(self):
         self._set_done("Confirmed")
@@ -179,25 +186,29 @@ class WelcomeState(QWidget):
         self._buttons = []
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 24, 4, 20)
-        layout.setSpacing(14)
+        layout.setContentsMargins(8, 36, 8, 24)
+        layout.setSpacing(16)
 
         title = QLabel("How can I help with this PC?")
         title.setProperty("role", "welcome-title")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
-        note = QLabel("Local AI can inspect diagnostics, suggest safe tools, and ask before changing anything.")
+        note = QLabel(
+            "Local AI can inspect diagnostics, suggest safe tools, and ask before changing anything."
+        )
         note.setProperty("role", "caption")
         note.setAlignment(Qt.AlignCenter)
         note.setWordWrap(True)
         layout.addWidget(note)
 
         grid = QGridLayout()
-        grid.setSpacing(8)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
         for index, (label, prompt, include_cleanup) in enumerate(quick_actions):
             button = QPushButton(label)
             button.setProperty("variant", "welcome-card")
+            button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(
                 lambda checked=False, label=label, prompt=prompt, include_cleanup=include_cleanup:
                 self.prompt_selected.emit(label, prompt, include_cleanup)
@@ -217,14 +228,14 @@ class TypingIndicator(QWidget):
         super().__init__()
         self.setProperty("role", "chat-message-row")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 2, 0, 2)
 
         bubble = QFrame()
         bubble.setProperty("role", "typing-indicator")
         bubble.setMaximumWidth(220)
         bubble_layout = QVBoxLayout(bubble)
-        bubble_layout.setContentsMargins(12, 9, 12, 9)
-        label = QLabel("Thinking...")
+        bubble_layout.setContentsMargins(16, 12, 16, 12)
+        label = QLabel("Thinking…")
         label.setProperty("role", "caption")
         bubble_layout.addWidget(label)
         layout.addWidget(bubble)
@@ -248,23 +259,28 @@ class ChatInputDock(QFrame):
     def __init__(self):
         super().__init__()
         self.setProperty("role", "chat-input-dock")
+        self.setMaximumWidth(780)
         self._input_enabled = False
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 12, 12, 12)
+        layout.setSpacing(10)
 
         self.editor = _SubmitTextEdit()
-        self.editor.setPlaceholderText("Ask about performance, cleanup, startup, display, audio, or layouts...")
-        self.editor.setFixedHeight(72)
+        self.editor.setPlaceholderText(
+            "Ask about performance, cleanup, startup, display, audio, or layouts…"
+        )
+        self.editor.setFixedHeight(76)
         self.editor.installEventFilter(self)
         self.editor.textChanged.connect(self._sync_send_button)
         self.editor.submit_requested.connect(self._submit)
         layout.addWidget(self.editor, 1)
 
         self.send_btn = QPushButton("Send")
+        self.send_btn.setProperty("variant", "chat-send")
+        self.send_btn.setCursor(Qt.PointingHandCursor)
         self.send_btn.clicked.connect(self._submit)
-        layout.addWidget(self.send_btn)
+        layout.addWidget(self.send_btn, 0, Qt.AlignBottom)
         self.set_input_enabled(False)
 
     def eventFilter(self, watched, event):
@@ -306,8 +322,8 @@ class ContextDrawer(QFrame):
         self.setFixedWidth(300)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
 
         header = QHBoxLayout()
         title = QLabel("PC Context")
@@ -326,7 +342,7 @@ class ContextDrawer(QFrame):
         layout.addWidget(self.status_label)
 
         self.rows_layout = QVBoxLayout()
-        self.rows_layout.setSpacing(8)
+        self.rows_layout.setSpacing(10)
         layout.addLayout(self.rows_layout)
         layout.addStretch(1)
 

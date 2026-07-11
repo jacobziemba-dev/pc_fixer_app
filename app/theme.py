@@ -65,6 +65,11 @@ QLabel[role="heading"] {
     font-weight: 700;
     color: #ffffff;
 }
+QLabel[role="welcome-title"] {
+    font-size: 22px;
+    font-weight: 700;
+    color: #ffffff;
+}
 QLabel[role="status-chip"] {
     color: #d7ddff;
     background-color: #2b2f3f;
@@ -102,6 +107,10 @@ QFrame[role="message-error"] {
     border: 1px solid #704045;
     border-radius: 8px;
 }
+QFrame[role="chat-thread"] {
+    background-color: transparent;
+    border: none;
+}
 QFrame[role="snapshot-panel"],
 QFrame[role="missing-model"],
 QFrame[role="action-card"] {
@@ -112,10 +121,28 @@ QFrame[role="action-card"] {
 QFrame[role="action-card"] {
     border-color: #4a5678;
 }
+QFrame[role="context-drawer"] {
+    background-color: #23252d;
+    border-left: 1px solid #363946;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
+    border-radius: 0;
+}
+QFrame[role="chat-input-dock"] {
+    background-color: #24252d;
+    border: 1px solid #353744;
+    border-radius: 10px;
+}
+QFrame[role="typing-indicator"] {
+    background-color: #252832;
+    border: 1px solid #363b4a;
+    border-radius: 10px;
+}
 QScrollArea[role="chat-scroll"] {
-    background-color: #202129;
-    border: 1px solid #33343d;
-    border-radius: 8px;
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
 }
 QToolButton {
     background-color: #24252d;
@@ -127,6 +154,23 @@ QToolButton {
 }
 QToolButton:hover {
     background-color: #2b2c35;
+}
+QToolButton[role="header-menu-btn"] {
+    background-color: #2b2c35;
+    border: 1px solid #383b49;
+    padding: 7px 12px;
+}
+QMenu {
+    background-color: #24252d;
+    color: #ffffff;
+    border: 1px solid #33343d;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 7px 22px;
+}
+QMenu::item:selected {
+    background-color: #30384d;
 }
 QProgressBar {
     border: none;
@@ -199,6 +243,18 @@ QPushButton[variant="chip"] {
 QPushButton[variant="chip"]:hover {
     background-color: #30384d;
 }
+QPushButton[variant="welcome-card"] {
+    background-color: #252832;
+    border: 1px solid #3a4052;
+    border-radius: 8px;
+    padding: 14px 12px;
+    min-height: 44px;
+    text-align: left;
+}
+QPushButton[variant="welcome-card"]:hover {
+    background-color: #2d3341;
+    border-color: #53617e;
+}
 QScrollArea {
     border: none;
 }
@@ -219,6 +275,14 @@ QTextEdit {
     border: 1px solid #33343d;
     border-radius: 6px;
     padding: 8px;
+}
+QFrame[role="chat-input-dock"] QTextEdit {
+    border: none;
+    background-color: #202129;
+}
+QFrame[role="chat-input-dock"] QTextEdit:disabled {
+    color: #6b6c78;
+    background-color: #202129;
 }
 QCheckBox {
     spacing: 8px;

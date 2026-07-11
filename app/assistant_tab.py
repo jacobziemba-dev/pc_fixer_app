@@ -3,7 +3,7 @@ from datetime import datetime
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QScrollArea, QFrame, QToolButton, QSizePolicy, QMessageBox,
+    QScrollArea, QFrame, QToolButton, QMenu, QMessageBox,
 )
 
 from app.ai_engine import (
@@ -35,6 +35,14 @@ from app.assistant_core import (
     skill_requests_to_actions,
     snapshot_summary_rows,
     strip_skill_requests,
+)
+from app.chat_widgets import (
+    ActionCard,
+    ChatInputDock,
+    ChatMessageRow,
+    ContextDrawer,
+    TypingIndicator,
+    WelcomeState,
 )
 
 
@@ -173,132 +181,6 @@ class ActionWorker(QThread):
         return execute_assistant_action(self._action, self._snapshot)
 
 
-class MessageBubble(QFrame):
-    def __init__(self, role, text=""):
-        super().__init__()
-        self.setProperty("role", f"message-{role}")
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        self.text_label = QLabel(text)
-        self.text_label.setWordWrap(True)
-        self.text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self.text_label)
-
-    def append_text(self, text):
-        self.text_label.setText(self.text_label.text() + text)
-
-    def set_text(self, text):
-        self.text_label.setText(text)
-
-    def text(self):
-        return self.text_label.text()
-
-
-class ActionCard(QFrame):
-    confirmed = Signal(object, object)
-
-    def __init__(self, action):
-        super().__init__()
-        self._action = action
-        self.setProperty("role", "action-card")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-
-        title = QLabel(action.title)
-        title.setProperty("role", "action-title")
-        title.setWordWrap(True)
-        layout.addWidget(title)
-
-        desc = QLabel(action.description)
-        desc.setProperty("role", "caption")
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
-
-        target_text = self._target_text(action)
-        if target_text:
-            target = QLabel(f"Target: {target_text}")
-            target.setProperty("role", "caption")
-            target.setWordWrap(True)
-            layout.addWidget(target)
-
-        change_text = "Changes PC: yes, confirmation required" if action.requires_confirmation else "Changes PC: no, read-only"
-        change = QLabel(change_text)
-        change.setProperty("role", "caption")
-        change.setWordWrap(True)
-        layout.addWidget(change)
-
-        expected = QLabel(f"Expected result: {self._expected_result(action)}")
-        expected.setProperty("role", "caption")
-        expected.setWordWrap(True)
-        layout.addWidget(expected)
-
-        risk = QLabel(f"Risk: {action.risk}")
-        risk.setProperty("role", "caption")
-        layout.addWidget(risk)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        self.cancel_btn = QPushButton(action.cancel_label)
-        self.cancel_btn.setProperty("variant", "secondary")
-        self.cancel_btn.clicked.connect(self._cancel)
-        self.confirm_btn = QPushButton(action.confirm_label)
-        self.confirm_btn.clicked.connect(self._confirm)
-        buttons.addWidget(self.cancel_btn)
-        buttons.addWidget(self.confirm_btn)
-        layout.addLayout(buttons)
-
-    def _confirm(self):
-        self._set_done("Confirmed")
-        self.confirmed.emit(self._action, self)
-
-    def _cancel(self):
-        self._set_done("Cancelled")
-
-    def _set_done(self, text):
-        self.confirm_btn.setEnabled(False)
-        self.cancel_btn.setEnabled(False)
-        self.confirm_btn.setText(text)
-
-    def _target_text(self, action):
-        payload = action.payload or {}
-        candidates = [
-            payload.get("device_name"),
-            payload.get("device_id"),
-            payload.get("process_name"),
-            payload.get("pid"),
-            payload.get("layout_id"),
-            ", ".join(payload.get("category_keys", [])) if isinstance(payload.get("category_keys"), list) else "",
-            payload.get("adapter_name"),
-            payload.get("plan_name"),
-            payload.get("root"),
-        ]
-        return next((str(value) for value in candidates if value), "")
-
-    def _expected_result(self, action):
-        if action.kind.startswith("refresh") or action.kind.startswith("check") or action.kind.startswith("scan"):
-            return "collect current information and update the app."
-        if action.kind == "clean_cleanup_candidates":
-            return "delete only the scanned cleanup categories shown in this app."
-        if action.kind == "set_display_refresh_rate":
-            return "change only the selected display refresh rate."
-        if action.kind.startswith("audio_"):
-            return "apply the selected audio change to the resolved app session."
-        if action.kind == "load_saved_layout":
-            return "move matching windows and launch missing apps when possible."
-        if action.kind == "flush_dns_cache":
-            return "clear Windows DNS resolver cache."
-        if action.kind == "restart_network_adapter":
-            return "restart the selected network adapter."
-        if action.kind == "set_power_plan":
-            return "switch the active Windows power plan."
-        if action.kind == "create_restore_point":
-            return "ask Windows to create a system restore point."
-        if action.kind == "export_pc_report":
-            return "write a local diagnostic report file."
-        return "run the selected PC Fix tool."
-
-
 class AssistantTab(QWidget):
     action_requested = Signal(str, dict)
 
@@ -318,14 +200,15 @@ class AssistantTab(QWidget):
         self._history = []
         self._pending_user_text = ""
         self._current_assistant_bubble = None
+        self._typing_indicator = None
         self._current_snapshot = None
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 14, 14, 14)
-        outer.setSpacing(10)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(8)
 
         header_layout = QHBoxLayout()
-        title = QLabel("Assistant")
+        title = QLabel("AI Chat")
         title.setProperty("role", "heading")
         header_layout.addWidget(title)
         header_layout.addStretch(1)
@@ -334,61 +217,37 @@ class AssistantTab(QWidget):
         self.status_chip.setProperty("role", "status-chip")
         header_layout.addWidget(self.status_chip)
 
-        self.snapshot_chip = QLabel("Snapshot not loaded")
-        self.snapshot_chip.setProperty("role", "status-chip")
-        header_layout.addWidget(self.snapshot_chip)
+        self.context_btn = QToolButton()
+        self.context_btn.setText("PC Context")
+        self.context_btn.setCheckable(True)
+        self.context_btn.setProperty("role", "header-menu-btn")
+        self.context_btn.toggled.connect(self._toggle_context_drawer)
+        header_layout.addWidget(self.context_btn)
 
-        self.stop_btn = QPushButton("Stop")
-        self.stop_btn.setProperty("variant", "secondary")
-        self.stop_btn.clicked.connect(self._stop_inference)
-        self.stop_btn.setVisible(False)
-        header_layout.addWidget(self.stop_btn)
-
-        self.clear_btn = QPushButton("Clear")
-        self.clear_btn.setProperty("variant", "secondary")
-        self.clear_btn.clicked.connect(self._clear_chat)
-        header_layout.addWidget(self.clear_btn)
-
-        self.recheck_btn = QPushButton("Recheck Model")
-        self.recheck_btn.setProperty("variant", "secondary")
-        self.recheck_btn.clicked.connect(self._recheck_model)
-        header_layout.addWidget(self.recheck_btn)
+        self.menu_btn = QToolButton()
+        self.menu_btn.setText("Menu")
+        self.menu_btn.setProperty("role", "header-menu-btn")
+        self.menu_btn.setPopupMode(QToolButton.InstantPopup)
+        header_menu = QMenu(self.menu_btn)
+        self.stop_action = header_menu.addAction("Stop")
+        self.stop_action.triggered.connect(self._stop_inference)
+        self.stop_action.setVisible(False)
+        header_menu.addAction("Clear", self._clear_chat)
+        header_menu.addAction("Recheck Model", self._recheck_model)
+        self.menu_btn.setMenu(header_menu)
+        header_layout.addWidget(self.menu_btn)
         outer.addLayout(header_layout)
 
-        subtitle = QLabel(
-            "Local diagnostics assistant. It can suggest safe app actions, "
-            "but anything that changes your PC requires confirmation."
-        )
-        subtitle.setProperty("role", "caption")
-        subtitle.setWordWrap(True)
-        outer.addWidget(subtitle)
+        body_layout = QHBoxLayout()
+        body_layout.setSpacing(12)
+        body_layout.addStretch(1)
 
-        self.missing_model_panel = self._build_missing_model_panel()
-        outer.addWidget(self.missing_model_panel)
-
-        self.snapshot_toggle = QToolButton()
-        self.snapshot_toggle.setText("PC Snapshot")
-        self.snapshot_toggle.setCheckable(True)
-        self.snapshot_toggle.setChecked(True)
-        self.snapshot_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.snapshot_toggle.setArrowType(Qt.DownArrow)
-        self.snapshot_toggle.toggled.connect(self._toggle_snapshot_panel)
-        outer.addWidget(self.snapshot_toggle)
-
-        self.snapshot_panel = QFrame()
-        self.snapshot_panel.setProperty("role", "snapshot-panel")
-        snapshot_layout = QVBoxLayout(self.snapshot_panel)
-        snapshot_layout.setContentsMargins(12, 10, 12, 10)
-        self.snapshot_rows_layout = QVBoxLayout()
-        snapshot_layout.addLayout(self.snapshot_rows_layout)
-        refresh_snapshot_layout = QHBoxLayout()
-        refresh_snapshot_layout.addStretch(1)
-        self.refresh_snapshot_btn = QPushButton("Refresh Snapshot")
-        self.refresh_snapshot_btn.setProperty("variant", "secondary")
-        self.refresh_snapshot_btn.clicked.connect(lambda: self._refresh_snapshot(False))
-        refresh_snapshot_layout.addWidget(self.refresh_snapshot_btn)
-        snapshot_layout.addLayout(refresh_snapshot_layout)
-        outer.addWidget(self.snapshot_panel)
+        thread_shell = QFrame()
+        thread_shell.setProperty("role", "chat-thread")
+        thread_shell.setMaximumWidth(780)
+        thread_layout = QVBoxLayout(thread_shell)
+        thread_layout.setContentsMargins(0, 0, 0, 0)
+        thread_layout.setSpacing(0)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -396,38 +255,35 @@ class AssistantTab(QWidget):
         self.feed = QWidget()
         self.feed_layout = QVBoxLayout(self.feed)
         self.feed_layout.setContentsMargins(8, 8, 8, 8)
-        self.feed_layout.setSpacing(8)
+        self.feed_layout.setSpacing(10)
+
+        self.welcome_state = WelcomeState(QUICK_ACTIONS)
+        self.welcome_state.prompt_selected.connect(self._start_inference)
+        self.feed_layout.addWidget(self.welcome_state)
+
+        self.missing_model_panel = self._build_missing_model_panel()
+        self.feed_layout.addWidget(self.missing_model_panel)
+
+        self.messages_widget = QWidget()
+        self.messages_layout = QVBoxLayout(self.messages_widget)
+        self.messages_layout.setContentsMargins(0, 0, 0, 0)
+        self.messages_layout.setSpacing(10)
+        self.feed_layout.addWidget(self.messages_widget)
         self.feed_layout.addStretch(1)
         self.scroll.setWidget(self.feed)
-        outer.addWidget(self.scroll, 1)
+        thread_layout.addWidget(self.scroll, 1)
 
-        quick_layout = QHBoxLayout()
-        quick_layout.setSpacing(6)
-        self.quick_buttons = []
-        for label, prompt, include_cleanup in QUICK_ACTIONS:
-            button = QPushButton(label)
-            button.setProperty("variant", "chip")
-            button.clicked.connect(
-                lambda checked=False, label=label, prompt=prompt, include_cleanup=include_cleanup:
-                    self._start_inference(label, prompt, include_cleanup)
-            )
-            button.setEnabled(False)
-            quick_layout.addWidget(button)
-            self.quick_buttons.append(button)
-        quick_layout.addStretch(1)
-        outer.addLayout(quick_layout)
+        body_layout.addWidget(thread_shell, 2)
+        self.context_drawer = ContextDrawer()
+        self.context_drawer.setVisible(False)
+        self.context_drawer.refresh_requested.connect(lambda: self._refresh_snapshot(False))
+        body_layout.addWidget(self.context_drawer)
+        body_layout.addStretch(1)
+        outer.addLayout(body_layout, 1)
 
-        input_layout = QHBoxLayout()
-        self.input_field = QLineEdit()
-        self.input_field.setPlaceholderText("Ask about performance, cleanup, startup, display, audio, or layouts...")
-        self.input_field.returnPressed.connect(self._send_message)
-        self.input_field.setEnabled(False)
-        input_layout.addWidget(self.input_field)
-        self.send_btn = QPushButton("Send")
-        self.send_btn.clicked.connect(self._send_message)
-        self.send_btn.setEnabled(False)
-        input_layout.addWidget(self.send_btn)
-        outer.addLayout(input_layout)
+        self.input_dock = ChatInputDock()
+        self.input_dock.submitted.connect(self._send_message_text)
+        outer.addWidget(self.input_dock)
 
         self._refresh_snapshot(False)
         if not model_exists():
@@ -435,6 +291,7 @@ class AssistantTab(QWidget):
         else:
             self._set_status("Waiting to load model")
             self.missing_model_panel.setVisible(False)
+            self._update_empty_state()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -445,7 +302,7 @@ class AssistantTab(QWidget):
         panel = QFrame()
         panel.setProperty("role", "missing-model")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(14, 12, 14, 12)
         title = QLabel("Model not found")
         title.setProperty("role", "action-title")
         layout.addWidget(title)
@@ -453,16 +310,21 @@ class AssistantTab(QWidget):
         self.missing_model_label.setProperty("role", "caption")
         self.missing_model_label.setWordWrap(True)
         layout.addWidget(self.missing_model_label)
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        recheck_btn = QPushButton("Recheck Model")
+        recheck_btn.setProperty("variant", "secondary")
+        recheck_btn.clicked.connect(self._recheck_model)
+        button_row.addWidget(recheck_btn)
+        layout.addLayout(button_row)
         return panel
 
     def _set_status(self, text):
         self.status_chip.setText(text)
 
     def _set_input_enabled(self, enabled):
-        self.input_field.setEnabled(enabled)
-        for button in self.quick_buttons:
-            button.setEnabled(enabled)
-        self.send_btn.setEnabled(enabled)
+        self.input_dock.set_input_enabled(enabled)
+        self.welcome_state.set_prompts_enabled(enabled)
 
     def _worker_is_running(self, worker):
         if worker is None:
@@ -494,9 +356,10 @@ class AssistantTab(QWidget):
     def _on_model_loaded(self):
         self._model_ready = True
         self.missing_model_panel.setVisible(False)
+        self._update_empty_state()
         self._set_status("Ready")
         self._set_input_enabled(True)
-        self.input_field.setFocus()
+        self.input_dock.focus_input()
 
     def _on_model_error(self, message):
         self._model_ready = False
@@ -509,6 +372,7 @@ class AssistantTab(QWidget):
         message = missing_model_message(resolve_model_path())
         self.missing_model_label.setText(message)
         self.missing_model_panel.setVisible(True)
+        self._update_empty_state()
         self._set_status("Model missing")
         self._set_input_enabled(False)
 
@@ -525,15 +389,13 @@ class AssistantTab(QWidget):
             return
         self._start_model_load()
 
-    def _toggle_snapshot_panel(self, checked):
-        self.snapshot_panel.setVisible(checked)
-        self.snapshot_toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+    def _toggle_context_drawer(self, checked):
+        self.context_drawer.setVisible(checked)
 
     def _refresh_snapshot(self, include_cleanup):
         if self._worker_is_running(self._snapshot_worker):
             return
-        self.refresh_snapshot_btn.setEnabled(False)
-        self.snapshot_chip.setText("Refreshing snapshot")
+        self.context_drawer.set_loading()
         self._snapshot_worker = SnapshotWorker(include_cleanup=include_cleanup)
         self._snapshot_worker.finished_with_snapshot.connect(self._on_snapshot_ready)
         self._snapshot_worker.error.connect(self._on_snapshot_error)
@@ -543,30 +405,20 @@ class AssistantTab(QWidget):
 
     def _clear_snapshot_worker(self):
         self._snapshot_worker = None
-        self.refresh_snapshot_btn.setEnabled(True)
 
     def _on_snapshot_ready(self, snapshot):
         self._current_snapshot = snapshot
         self._render_snapshot(snapshot)
 
     def _on_snapshot_error(self, message):
-        self.snapshot_chip.setText("Snapshot failed")
+        self.context_drawer.set_error(message)
         self._add_message("error", f"Snapshot refresh failed: {message}")
 
     def _render_snapshot(self, snapshot):
-        self._clear_layout(self.snapshot_rows_layout)
-        for name, value in snapshot_summary_rows(snapshot):
-            row = QHBoxLayout()
-            key = QLabel(name)
-            key.setProperty("role", "snapshot-key")
-            value_label = QLabel(value)
-            value_label.setProperty("role", "caption")
-            value_label.setWordWrap(True)
-            row.addWidget(key)
-            row.addStretch(1)
-            row.addWidget(value_label, 2)
-            self.snapshot_rows_layout.addLayout(row)
-        self.snapshot_chip.setText(f"Snapshot {snapshot.timestamp.strftime('%H:%M:%S')}")
+        self.context_drawer.set_snapshot(
+            snapshot.timestamp.strftime("%H:%M:%S"),
+            snapshot_summary_rows(snapshot),
+        )
 
     def _clear_layout(self, layout):
         while layout.count():
@@ -576,17 +428,40 @@ class AssistantTab(QWidget):
             elif item.layout():
                 self._clear_layout(item.layout())
 
+    def _update_empty_state(self):
+        has_messages = self.messages_layout.count() > 0
+        missing_model = self.missing_model_panel.isVisible()
+        self.messages_widget.setVisible(has_messages)
+        self.welcome_state.setVisible(not has_messages and not missing_model)
+
+    def _remove_typing_indicator(self):
+        if not self._typing_indicator:
+            return
+        self.messages_layout.removeWidget(self._typing_indicator)
+        self._typing_indicator.deleteLater()
+        self._typing_indicator = None
+        self._update_empty_state()
+
+    def _ensure_assistant_bubble(self):
+        if self._current_assistant_bubble:
+            return self._current_assistant_bubble
+        self._remove_typing_indicator()
+        self._current_assistant_bubble = self._add_message("assistant", "")
+        return self._current_assistant_bubble
+
     def _add_message(self, role, text=""):
-        bubble = MessageBubble(role, text)
-        self.feed_layout.insertWidget(self.feed_layout.count() - 1, bubble)
+        row = ChatMessageRow(role, text)
+        self.messages_layout.addWidget(row)
+        self._update_empty_state()
         QTimer.singleShot(0, self._scroll_to_bottom)
-        return bubble
+        return row.bubble
 
     def _add_action_cards(self, actions):
         for action in actions:
             card = ActionCard(action)
             card.confirmed.connect(self._run_action)
-            self.feed_layout.insertWidget(self.feed_layout.count() - 1, card)
+            self.messages_layout.addWidget(card, 0, Qt.AlignLeft)
+            self._update_empty_state()
         if actions:
             QTimer.singleShot(0, self._scroll_to_bottom)
 
@@ -595,10 +470,7 @@ class AssistantTab(QWidget):
         bar.setValue(bar.maximum())
 
     def _clear_chat(self):
-        while self.feed_layout.count() > 1:
-            item = self.feed_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self._clear_layout(self.messages_layout)
         self._history = []
         self._assistant_buffer = ""
         self._assistant_visible_buffer = ""
@@ -606,12 +478,18 @@ class AssistantTab(QWidget):
         self._stream_filter_in_skill_block = False
         self._pending_user_text = ""
         self._current_assistant_bubble = None
+        self._typing_indicator = None
+        self._update_empty_state()
 
     def _send_message(self):
-        user_text = self.input_field.text().strip()
+        user_text = self.input_dock.text().strip()
         if not user_text:
             return
-        self.input_field.clear()
+        self.input_dock.clear()
+        self._start_inference(user_text, user_text, self._should_include_cleanup(user_text))
+
+    def _send_message_text(self, user_text):
+        self.input_dock.clear()
         self._start_inference(user_text, user_text, self._should_include_cleanup(user_text))
 
     def _should_include_cleanup(self, text):
@@ -627,11 +505,14 @@ class AssistantTab(QWidget):
         self._stream_filter_buffer = ""
         self._stream_filter_in_skill_block = False
         self._pending_user_text = display_text
-        self._current_assistant_bubble = self._add_message("assistant", "")
+        self._current_assistant_bubble = None
+        self._typing_indicator = TypingIndicator()
+        self.messages_layout.addWidget(self._typing_indicator)
         self._set_input_enabled(False)
-        self.stop_btn.setVisible(True)
+        self.stop_action.setVisible(True)
+        self.stop_action.setEnabled(True)
         self._set_status("Thinking")
-        self.snapshot_chip.setText("Refreshing snapshot")
+        self.context_drawer.set_loading()
 
         self._infer_worker = InferenceWorker(
             self._engine,
@@ -662,8 +543,7 @@ class AssistantTab(QWidget):
         visible_text = self._filter_streaming_skill_json(token)
         if visible_text:
             self._assistant_visible_buffer += visible_text
-            if self._current_assistant_bubble:
-                self._current_assistant_bubble.append_text(visible_text)
+            self._ensure_assistant_bubble().append_text(visible_text)
             QTimer.singleShot(0, self._scroll_to_bottom)
 
     def _filter_streaming_skill_json(self, token):
@@ -722,8 +602,7 @@ class AssistantTab(QWidget):
         cleaned = text.strip() or self._assistant_visible_buffer.strip() or tail.strip() or "I found an app action that can help."
         self._assistant_buffer = cleaned
         self._assistant_visible_buffer = cleaned
-        if self._current_assistant_bubble:
-            self._current_assistant_bubble.set_text(cleaned)
+        self._ensure_assistant_bubble().set_text(cleaned)
         QTimer.singleShot(0, self._scroll_to_bottom)
 
     def _on_skill_messages_ready(self, messages):
@@ -742,24 +621,25 @@ class AssistantTab(QWidget):
         self._finish_inference_ui("Ready")
 
     def _on_inference_cancelled(self):
-        if self._current_assistant_bubble:
-            self._current_assistant_bubble.append_text("\n[Stopped]")
+        self._ensure_assistant_bubble().append_text("\n[Stopped]")
         self._finish_inference_ui("Ready")
 
     def _on_inference_error(self, message):
         if self._current_assistant_bubble and self._assistant_buffer:
             self._current_assistant_bubble.append_text(f"\n[Error: {message}]")
         else:
+            self._remove_typing_indicator()
             self._add_message("error", message)
         self._finish_inference_ui("Error")
 
     def _finish_inference_ui(self, status):
         self._pending_user_text = ""
-        self.stop_btn.setVisible(False)
+        self.stop_action.setEnabled(False)
+        self.stop_action.setVisible(False)
         self._set_status(status)
         self._set_input_enabled(self._model_ready)
         if self._model_ready:
-            self.input_field.setFocus()
+            self.input_dock.focus_input()
 
     def _run_action(self, action, card):
         if action.kind in TAB_ACTION_KINDS:

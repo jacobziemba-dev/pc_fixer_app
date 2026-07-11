@@ -12,7 +12,7 @@ from app.job_queue import get_job_queue
 
 # Heavy tabs are created on first visit to keep startup responsive.
 _LAZY_TABS = {
-    1: ("app.assistant_tab", "AssistantTab", "Assistant"),
+    1: ("app.assistant_tab", "AssistantTab", "AI Chat"),
     2: ("app.health_tab", "HealthTab", "Health"),
     3: ("app.cleanup_tab", "CleanupTab", "Cleanup"),
     4: ("app.dashboard_tab", "DashboardTab", "Performance"),
@@ -28,6 +28,7 @@ _LAZY_TABS = {
 _TOOL_SEARCH = {
     "assistant": 1,
     "ai": 1,
+    "chat": 1,
     "health": 2,
     "update": 2,
     "disk": 2,
@@ -81,7 +82,7 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(DashboardTab(), "Dashboard")
-        self.tabs.addTab(_placeholder("Loading Assistant..."), "Assistant")
+        self.tabs.addTab(_placeholder("Loading AI Chat..."), "AI Chat")
         self.tabs.addTab(_placeholder("Loading Health..."), "Health")
         self.tabs.addTab(_placeholder("Loading Cleanup..."), "Cleanup")
         self.tabs.addTab(_placeholder("Loading Performance..."), "Performance")
@@ -100,7 +101,7 @@ class MainWindow(QMainWindow):
         shell_layout = QVBoxLayout(shell)
         shell_layout.setContentsMargins(8, 8, 8, 8)
         self.tool_search = QLineEdit()
-        self.tool_search.setPlaceholderText("Find a tool: cleanup, network, disk, audio, report...")
+        self.tool_search.setPlaceholderText("Find a tool: chat, cleanup, network, disk, audio, report...")
         self.tool_search.returnPressed.connect(self._jump_to_tool)
         shell_layout.addWidget(self.tool_search)
         shell_layout.addWidget(self.tabs, 1)

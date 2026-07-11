@@ -215,6 +215,24 @@ class ActionCard(QFrame):
         desc.setWordWrap(True)
         layout.addWidget(desc)
 
+        target_text = self._target_text(action)
+        if target_text:
+            target = QLabel(f"Target: {target_text}")
+            target.setProperty("role", "caption")
+            target.setWordWrap(True)
+            layout.addWidget(target)
+
+        change_text = "Changes PC: yes, confirmation required" if action.requires_confirmation else "Changes PC: no, read-only"
+        change = QLabel(change_text)
+        change.setProperty("role", "caption")
+        change.setWordWrap(True)
+        layout.addWidget(change)
+
+        expected = QLabel(f"Expected result: {self._expected_result(action)}")
+        expected.setProperty("role", "caption")
+        expected.setWordWrap(True)
+        layout.addWidget(expected)
+
         risk = QLabel(f"Risk: {action.risk}")
         risk.setProperty("role", "caption")
         layout.addWidget(risk)
@@ -241,6 +259,44 @@ class ActionCard(QFrame):
         self.confirm_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.confirm_btn.setText(text)
+
+    def _target_text(self, action):
+        payload = action.payload or {}
+        candidates = [
+            payload.get("device_name"),
+            payload.get("device_id"),
+            payload.get("process_name"),
+            payload.get("pid"),
+            payload.get("layout_id"),
+            ", ".join(payload.get("category_keys", [])) if isinstance(payload.get("category_keys"), list) else "",
+            payload.get("adapter_name"),
+            payload.get("plan_name"),
+            payload.get("root"),
+        ]
+        return next((str(value) for value in candidates if value), "")
+
+    def _expected_result(self, action):
+        if action.kind.startswith("refresh") or action.kind.startswith("check") or action.kind.startswith("scan"):
+            return "collect current information and update the app."
+        if action.kind == "clean_cleanup_candidates":
+            return "delete only the scanned cleanup categories shown in this app."
+        if action.kind == "set_display_refresh_rate":
+            return "change only the selected display refresh rate."
+        if action.kind.startswith("audio_"):
+            return "apply the selected audio change to the resolved app session."
+        if action.kind == "load_saved_layout":
+            return "move matching windows and launch missing apps when possible."
+        if action.kind == "flush_dns_cache":
+            return "clear Windows DNS resolver cache."
+        if action.kind == "restart_network_adapter":
+            return "restart the selected network adapter."
+        if action.kind == "set_power_plan":
+            return "switch the active Windows power plan."
+        if action.kind == "create_restore_point":
+            return "ask Windows to create a system restore point."
+        if action.kind == "export_pc_report":
+            return "write a local diagnostic report file."
+        return "run the selected PC Fix tool."
 
 
 class AssistantTab(QWidget):

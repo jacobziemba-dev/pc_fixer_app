@@ -1031,6 +1031,8 @@ def propose_actions(user_text, snapshot=None):
             "audio_mute_session",
             "audio_route_session",
             "load_saved_layout",
+            "restart_network_adapter",
+            "set_power_plan",
         }:
             continue
         if _matches_any(lowered, tool.keywords):
@@ -1366,6 +1368,52 @@ def skill_request_to_action(request, snapshot=None):
             payload={"layout_id": layout["id"]},
         ), ""
 
+    if kind == "restart_network_adapter":
+        adapter_name = str(args.get("adapter_name", "")).strip()
+        if not adapter_name:
+            return None, "No network adapter was selected."
+        return _action(
+            kind,
+            description=f"Restart network adapter {adapter_name}.",
+            payload={"adapter_name": adapter_name},
+        ), ""
+
+    if kind == "set_power_plan":
+        plan_name = str(args.get("plan_name", "")).strip()
+        allowed = {"balanced", "high_performance", "high performance", "power_saver", "power saver"}
+        if plan_name.lower() not in allowed:
+            return None, "Power plan must be balanced, high_performance, or power_saver."
+        return _action(
+            kind,
+            description=f"Switch the active Windows power plan to {plan_name}.",
+            payload={"plan_name": plan_name},
+        ), ""
+
+    if kind == "scan_event_log_errors":
+        hours = int(args.get("hours", 24))
+        hours = max(1, min(hours, 168))
+        return _action(
+            kind,
+            description=f"Scan recent event log errors from the last {hours} hour(s).",
+            payload={"hours": hours},
+        ), ""
+
+    if kind == "scan_large_files":
+        payload = {}
+        if args.get("root"):
+            payload["root"] = str(args["root"])
+        if args.get("min_size_mb"):
+            payload["min_size_mb"] = int(args["min_size_mb"])
+        return _action(kind, payload=payload), ""
+
+    if kind == "create_restore_point":
+        description = str(args.get("description") or "PC Fix restore point")
+        return _action(
+            kind,
+            description=f"Create a Windows restore point named \"{description}\".",
+            payload={"description": description},
+        ), ""
+
     return _action(kind, payload={}), ""
 
 
@@ -1536,7 +1584,51 @@ def execute_assistant_action(action, snapshot=None):
         refreshed = collect_assistant_snapshot(include_cleanup=False) if result.success else snapshot
         return result, refreshed
 
+    toolbox_result = _execute_toolbox_action(action)
+    if toolbox_result:
+        tool_history.add_result(toolbox_result)
+        refreshed = collect_assistant_snapshot(include_cleanup=False) if toolbox_result.success else snapshot
+        message = toolbox_result.summary
+        if toolbox_result.details:
+            message += "\n" + "\n".join(f"- {detail}" for detail in toolbox_result.details[:8])
+        return AssistantActionResult(toolbox_result.success, message, toolbox_result.errors), refreshed
+
     return AssistantActionResult(False, f"Unsupported action: {kind}"), snapshot
+
+
+def _execute_toolbox_action(action):
+    kind = action.kind
+    payload = action.payload or {}
+    if kind == "check_windows_updates":
+        return toolbox.check_windows_updates()
+    if kind == "check_disk_health":
+        return toolbox.check_disk_health()
+    if kind == "scan_event_log_errors":
+        return toolbox.scan_event_log_errors(hours=payload.get("hours", 24))
+    if kind == "check_network_health":
+        return toolbox.check_network_health()
+    if kind == "flush_dns_cache":
+        return toolbox.flush_dns_cache()
+    if kind == "restart_network_adapter":
+        return toolbox.restart_network_adapter(payload.get("adapter_name", ""))
+    if kind == "check_power_plan":
+        return toolbox.check_power_plan()
+    if kind == "set_power_plan":
+        return toolbox.set_power_plan(payload.get("plan_name", ""))
+    if kind == "review_startup_impact":
+        return toolbox.review_startup_impact()
+    if kind == "check_windows_security":
+        return toolbox.check_windows_security()
+    if kind == "scan_large_files":
+        return toolbox.scan_large_files(
+            root=payload.get("root"),
+            min_size_mb=payload.get("min_size_mb", 500),
+        )
+    if kind == "create_restore_point":
+        return toolbox.create_restore_point(payload.get("description", "PC Fix restore point"))
+    if kind == "export_pc_report":
+        return toolbox.export_pc_report()
+    return None
 
 
 def _execute_audio_action(action):

@@ -54,6 +54,12 @@ QLabel[role="caption"] {
     color: #9294a3;
     font-size: 12px;
 }
+QLabel[role="caption"][state="success"] {
+    color: #9ee0b1;
+}
+QLabel[role="caption"][state="error"] {
+    color: #ff9ea5;
+}
 QLabel[role="heading"] {
     font-size: 16px;
     font-weight: 700;
@@ -206,6 +212,13 @@ QLineEdit {
 QLineEdit:disabled {
     color: #6b6c78;
     background-color: #202129;
+}
+QTextEdit {
+    background-color: #24252d;
+    color: #e6e6ec;
+    border: 1px solid #33343d;
+    border-radius: 6px;
+    padding: 8px;
 }
 QCheckBox {
     spacing: 8px;

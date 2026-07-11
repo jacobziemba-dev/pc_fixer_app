@@ -18,7 +18,9 @@ DEFAULT_SYSTEM_PROMPT = (
     "Use recent conversation only for continuity, not as hardware facts. "
     "Answer in 2-4 short sentences with practical advice. "
     "Do not invent hardware details that are not in the snapshot. "
-    "When an app action would help, you may include fenced JSON skill requests. "
+    "When an app action would help, explain what you found, recommend one or two next actions, "
+    "and include fenced JSON skill requests only for known skills. "
+    "Never claim an action already ran before the app confirms it. "
     "The app validates every request and requires confirmation for PC-changing actions."
 )
 HEALTH_CHECK_PROMPT = (

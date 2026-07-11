@@ -28,6 +28,19 @@ This file documents what the PC Fix assistant can request through LLM chat. The 
 | `route_app_audio` | `audio_route_session` | Low | Yes | Routes one active app audio session to a playback device after Python resolves both the app and device targets. |
 | `refresh_layouts` | `refresh_layouts` | Read-only | No | Refreshes open-window layout information and saved layouts. |
 | `load_saved_layout` | `load_saved_layout` | Medium | Yes | Loads a saved window layout after Python resolves the layout target by id or name. It may move matching windows and launch missing apps when possible. |
+| `check_windows_updates` | `check_windows_updates` | Read-only | No | Reads pending Windows Update count, reboot-pending status, and recent hotfix information. |
+| `check_disk_health` | `check_disk_health` | Read-only | No | Reads physical disk health, operational status, media type, and size where Windows exposes it. |
+| `scan_event_log_errors` | `scan_event_log_errors` | Read-only | No | Summarizes recent critical and error events from the Windows System and Application event logs. |
+| `check_network_health` | `check_network_health` | Read-only | No | Checks local IPs, active adapters, DNS servers, and basic internet reachability. |
+| `flush_dns_cache` | `flush_dns_cache` | Low | Yes | Clears the Windows DNS resolver cache. |
+| `restart_network_adapter` | `restart_network_adapter` | Medium | Yes | Restarts one named network adapter. This can briefly disconnect the network. |
+| `check_power_plan` | `check_power_plan` | Read-only | No | Reads the active Windows power plan and available schemes. |
+| `set_power_plan` | `set_power_plan` | Low | Yes | Switches the active Windows power plan to Balanced, High Performance, or Power Saver. |
+| `review_startup_impact` | `review_startup_impact` | Read-only | No | Classifies startup entries with conservative keep/review/optional hints. It does not disable startup items. |
+| `check_windows_security` | `check_windows_security` | Read-only | No | Reads Defender and firewall status where Windows exposes it. |
+| `scan_large_files` | `scan_large_files` | Read-only | No | Finds large files under a selected root without deleting anything. |
+| `create_restore_point` | `create_restore_point` | Medium | Yes | Requests a Windows system restore point before higher-risk repair operations. |
+| `export_pc_report` | `export_pc_report` | Read-only | No | Writes a local diagnostic report with system summary and startup review details. |
 
 ## Skill Request Format
 
@@ -58,3 +71,8 @@ Target-based examples:
 - Display targets: `device_name` or `display_label`; if omitted, Python uses the primary display when unambiguous.
 - Layout targets: `layout_id` or `layout_name`; if omitted, Python only uses the layout when exactly one saved layout exists.
 - Cleanup targets: optional `category_keys`; if omitted, Python uses currently scanned cleanup categories.
+- Network adapter targets: `adapter_name`.
+- Power plan targets: `plan_name` with `balanced`, `high_performance`, or `power_saver`.
+- Event log scan options: optional `hours`.
+- Large-file scan options: optional `root` and `min_size_mb`.
+- Restore point options: optional `description`.

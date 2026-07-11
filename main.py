@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 
 from app.theme import DARK_STYLESHEET
 from app.dashboard_tab import DashboardTab
+from app.job_queue import get_job_queue
 
 
 # Heavy tabs are created on first visit to keep startup responsive.
@@ -105,6 +106,7 @@ class MainWindow(QMainWindow):
         shell_layout.addWidget(self.tabs, 1)
         self.setCentralWidget(shell)
         self.statusBar().showMessage("Ready")
+        get_job_queue().status_changed.connect(self.statusBar().showMessage)
 
     def _ensure_tab_loaded(self, index):
         if index in self._loaded_tabs or index not in _LAZY_TABS:

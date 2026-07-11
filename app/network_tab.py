@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 )
 
 from app import toolbox
-from app.toolbox_widgets import ToolWorker, result_text, set_status_label
+from app.toolbox_widgets import ToolRunner, result_text, set_status_label
 
 
 class NetworkTab(QWidget):
@@ -15,7 +15,6 @@ class NetworkTab(QWidget):
 
     def __init__(self):
         super().__init__()
-        self._worker = None
 
         outer = QVBoxLayout(self)
         header = QHBoxLayout()
@@ -62,6 +61,13 @@ class NetworkTab(QWidget):
         self.status_label.setProperty("role", "caption")
         self.status_label.setWordWrap(True)
         outer.addWidget(self.status_label)
+        self._runner = ToolRunner(
+            "network-tools",
+            self._set_busy,
+            self.status_label,
+            self.status_changed,
+            "Running network tool...",
+        )
 
         self.output = QTextEdit()
         self.output.setReadOnly(True)
@@ -81,26 +87,13 @@ class NetworkTab(QWidget):
             button.setEnabled(not busy)
 
     def _run_tool(self, fn, *args):
-        if self._worker is not None and self._worker.isRunning():
-            return
-        self._set_busy(True)
-        set_status_label(self.status_label, "Running network tool...")
-        self.status_changed.emit("Running network tool...")
-        self._worker = ToolWorker(fn, *args)
-        self._worker.finished_with_result.connect(self._on_result)
-        self._worker.finished.connect(self._clear_worker)
-        self._worker.finished.connect(self._worker.deleteLater)
-        self._worker.start()
-
-    def _clear_worker(self):
-        self._worker = None
-        self._set_busy(False)
-        self._load_adapters()
+        self._runner.start(fn, args, self._on_result)
 
     def _on_result(self, result):
         set_status_label(self.status_label, result.summary, result.success)
         self.status_changed.emit(result.summary)
         self.output.setPlainText(result_text(result))
+        self._load_adapters()
 
     def _confirm_flush_dns(self):
         reply = QMessageBox.question(

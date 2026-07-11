@@ -13,13 +13,6 @@ class HealthTab(QWidget):
 
     def __init__(self):
         super().__init__()
-        self._runner = ToolRunner(
-            self._set_busy,
-            self.status_label if hasattr(self, "status_label") else None,
-            self.status_changed,
-            "Running health tool...",
-        )
-
         outer = QVBoxLayout(self)
         header = QHBoxLayout()
         title = QLabel("Health Checks")
@@ -85,6 +78,7 @@ class HealthTab(QWidget):
         self.status_label.setWordWrap(True)
         outer.addWidget(self.status_label)
         self._runner = ToolRunner(
+            "health-tools",
             self._set_busy,
             self.status_label,
             self.status_changed,

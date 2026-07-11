@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 )
 
 from app import system_info as sysinfo
+from app.job_queue import get_job_queue
 
 
 class DisplayLoadWorker(QThread):
@@ -120,21 +121,37 @@ class DisplayTab(QWidget):
         self._pending_previous = None
         self._pending_action = ""
         self._post_load_status = ""
-        self._load_worker = None
-        self._apply_worker = None
-
+        self._reload_after_apply = False
         self.load()
 
     def load(self):
+        worker = DisplayLoadWorker()
+        get_job_queue().submit(
+            scope="display",
+            title="Loading connected displays...",
+            worker=worker,
+            result_signal="finished_with_data",
+            on_started=self._on_load_started,
+            on_result=self._on_loaded,
+            on_finished=self._on_display_worker_finished,
+            on_rejected=lambda message: self.status_label.setText(message),
+        )
+
+    def _on_load_started(self):
         self.refresh_btn.setEnabled(False)
         self.apply_btn.setEnabled(False)
+        self.revert_btn.setEnabled(False)
         self.status_label.setText("Loading connected displays...")
-        self._load_worker = DisplayLoadWorker()
-        self._load_worker.finished_with_data.connect(self._on_loaded)
-        self._load_worker.start()
+
+    def _on_display_worker_finished(self):
+        self.refresh_btn.setEnabled(True)
+        self.revert_btn.setEnabled(bool(self._previous_change))
+        self._on_monitor_changed()
+        if self._reload_after_apply:
+            self._reload_after_apply = False
+            self.load()
 
     def _on_loaded(self, devices, modes, rates, error):
-        self.refresh_btn.setEnabled(True)
         self._devices = devices
         self._modes = modes
         self._rates = rates
@@ -247,18 +264,27 @@ class DisplayTab(QWidget):
         self._start_apply(device_name, int(previous_hz), current_hz, "revert")
 
     def _start_apply(self, device_name, target_hz, previous_hz, action):
+        self._pending_previous = (device_name, previous_hz, self._label_for_device(device_name))
+        self._pending_action = action
+        worker = ApplyRefreshWorker(device_name, target_hz)
+        get_job_queue().submit(
+            scope="display",
+            title=f"Changing refresh rate to {target_hz} Hz...",
+            worker=worker,
+            result_signal="finished_with_result",
+            on_started=lambda: self._on_apply_started(target_hz),
+            on_result=self._on_applied,
+            on_finished=self._on_display_worker_finished,
+            on_rejected=lambda message: self.status_label.setText(message),
+        )
+
+    def _on_apply_started(self, target_hz):
         self.apply_btn.setEnabled(False)
         self.revert_btn.setEnabled(False)
         self.refresh_btn.setEnabled(False)
         self.status_label.setText(f"Changing refresh rate to {target_hz} Hz...")
-        self._pending_previous = (device_name, previous_hz, self._label_for_device(device_name))
-        self._pending_action = action
-        self._apply_worker = ApplyRefreshWorker(device_name, target_hz)
-        self._apply_worker.finished_with_result.connect(self._on_applied)
-        self._apply_worker.start()
 
     def _on_applied(self, result):
-        self.refresh_btn.setEnabled(True)
         if result.success:
             if self._pending_action == "apply":
                 self._previous_change = self._pending_previous
@@ -266,7 +292,7 @@ class DisplayTab(QWidget):
                 self._previous_change = None
             self.revert_btn.setEnabled(bool(self._previous_change))
             self._post_load_status = result.message
-            self.load()
+            self._reload_after_apply = True
             return
 
         self.revert_btn.setEnabled(bool(self._previous_change))

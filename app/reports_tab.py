@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
 )
 
 from app import toolbox, tool_history
-from app.toolbox_widgets import ToolWorker, populate_history_table, result_text, set_status_label
+from app.toolbox_widgets import ToolRunner, populate_history_table, result_text, set_status_label
 
 
 class ReportsTab(QWidget):
@@ -13,7 +13,6 @@ class ReportsTab(QWidget):
 
     def __init__(self):
         super().__init__()
-        self._worker = None
 
         outer = QVBoxLayout(self)
         header = QHBoxLayout()
@@ -48,6 +47,13 @@ class ReportsTab(QWidget):
         self.status_label.setProperty("role", "caption")
         self.status_label.setWordWrap(True)
         outer.addWidget(self.status_label)
+        self._runner = ToolRunner(
+            "reports-tools",
+            self._set_busy,
+            self.status_label,
+            self.status_changed,
+            "Exporting report...",
+        )
 
         self.history_table = QTableWidget(0, 4)
         self.history_table.setHorizontalHeaderLabels(["Time", "Tool", "State", "Summary"])
@@ -67,20 +73,11 @@ class ReportsTab(QWidget):
         self._refresh_history()
 
     def _run_tool(self, fn, *args):
-        if self._worker is not None and self._worker.isRunning():
-            return
-        self.export_btn.setEnabled(False)
-        set_status_label(self.status_label, "Exporting report...")
-        self.status_changed.emit("Exporting report...")
-        self._worker = ToolWorker(fn, *args)
-        self._worker.finished_with_result.connect(self._on_result)
-        self._worker.finished.connect(self._clear_worker)
-        self._worker.finished.connect(self._worker.deleteLater)
-        self._worker.start()
+        self._runner.start(fn, args, self._on_result)
 
-    def _clear_worker(self):
-        self._worker = None
-        self.export_btn.setEnabled(True)
+    def _set_busy(self, busy):
+        self.export_btn.setEnabled(not busy)
+        self.clear_btn.setEnabled(not busy)
 
     def _on_result(self, result):
         set_status_label(self.status_label, result.summary, result.success)

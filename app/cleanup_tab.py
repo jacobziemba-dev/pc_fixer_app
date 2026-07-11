@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
 )
 
 from app import system_info as sysinfo
+from app.job_queue import get_job_queue
 
 
 class ScanWorker(QThread):
@@ -96,21 +97,40 @@ class CleanupTab(QWidget):
 
         self._categories = []
         self._checkboxes = []
-        self._scan_worker = None
-        self._delete_worker = None
+        self._rescan_after_clean = False
 
     def start_scan(self):
+        worker = ScanWorker()
+        get_job_queue().submit(
+            scope="cleanup",
+            title="Scanning cleanup targets...",
+            worker=worker,
+            result_signal="finished_with_data",
+            on_started=self._on_scan_started,
+            on_result=self._on_scanned,
+            on_finished=self._on_cleanup_worker_finished,
+            on_rejected=lambda message: self.status_label.setText(message),
+        )
+
+    def _on_scan_started(self):
         self.scan_btn.setEnabled(False)
         self.clean_btn.setEnabled(False)
+        self.select_all_btn.setEnabled(False)
+        self.select_none_btn.setEnabled(False)
         self.status_label.setText("Scanning temp folders, browser caches, and Recycle Bin...")
         self.table.setRowCount(0)
-        self._scan_worker = ScanWorker()
-        self._scan_worker.finished_with_data.connect(self._on_scanned)
-        self._scan_worker.start()
+
+    def _on_cleanup_worker_finished(self):
+        self.scan_btn.setEnabled(True)
+        self.select_all_btn.setEnabled(True)
+        self.select_none_btn.setEnabled(True)
+        self._update_total()
+        if self._rescan_after_clean:
+            self._rescan_after_clean = False
+            self.start_scan()
 
     def _on_scanned(self, categories):
         self._categories = categories
-        self.scan_btn.setEnabled(True)
         self._checkboxes = []
 
         if not categories:
@@ -174,11 +194,24 @@ class CleanupTab(QWidget):
             return
 
         self.clean_btn.setEnabled(False)
+        worker = DeleteWorker(selected)
+        get_job_queue().submit(
+            scope="cleanup",
+            title="Cleaning selected items...",
+            worker=worker,
+            result_signal="finished_with_result",
+            on_started=self._on_delete_started,
+            on_result=self._on_cleaned,
+            on_finished=self._on_cleanup_worker_finished,
+            on_rejected=lambda message: self.status_label.setText(message),
+        )
+
+    def _on_delete_started(self):
+        self.clean_btn.setEnabled(False)
         self.scan_btn.setEnabled(False)
+        self.select_all_btn.setEnabled(False)
+        self.select_none_btn.setEnabled(False)
         self.status_label.setText("Cleaning selected items...")
-        self._delete_worker = DeleteWorker(selected)
-        self._delete_worker.finished_with_result.connect(self._on_cleaned)
-        self._delete_worker.start()
 
     def _on_cleaned(self, bytes_freed, errors):
         self.scan_btn.setEnabled(True)
@@ -187,4 +220,4 @@ class CleanupTab(QWidget):
             message += f" {len(errors)} item(s) were skipped (in use or access denied)."
         self.status_label.setText(message)
         QMessageBox.information(self, "Cleanup Complete", message)
-        self.start_scan()
+        self._rescan_after_clean = True

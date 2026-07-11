@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QLineEdit, QScrollArea, QFrame, QToolButton, QSizePolicy, QMessageBox,
 )
 
-from app import system_info as sysinfo
 from app.ai_engine import (
     AIEngineError,
     CLEANUP_REVIEW_PROMPT,
@@ -27,7 +26,9 @@ from app.assistant_core import (
     AssistantAction,
     AssistantActionResult,
     AssistantTurn,
+    TAB_ACTION_KINDS,
     collect_assistant_snapshot,
+    execute_assistant_action,
     propose_actions,
     snapshot_summary_rows,
 )
@@ -150,44 +151,7 @@ class ActionWorker(QThread):
         self.finished_with_result.emit(result, snapshot)
 
     def _run_action(self):
-        kind = self._action.kind
-        if kind == "refresh_snapshot":
-            snapshot = collect_assistant_snapshot(include_cleanup=False)
-            return AssistantActionResult(True, "PC snapshot refreshed."), snapshot
-
-        if kind == "scan_cleanup":
-            snapshot = collect_assistant_snapshot(include_cleanup=True)
-            total = sum(cat.size_bytes for cat in snapshot.cleanup_categories)
-            message = (
-                f"Found {sysinfo.format_bytes(total)} across "
-                f"{len(snapshot.cleanup_categories)} cleanup categor(ies)."
-            )
-            return AssistantActionResult(True, message), snapshot
-
-        if kind == "clean_cleanup_candidates":
-            if not self._snapshot:
-                return AssistantActionResult(False, "No cleanup scan is available."), self._snapshot
-            keys = set(self._action.payload.get("category_keys", []))
-            categories = [
-                cat for cat in self._snapshot.cleanup_categories
-                if cat.key in keys
-            ]
-            if not categories:
-                return AssistantActionResult(False, "No matching cleanup categories are available."), self._snapshot
-            bytes_freed, errors = sysinfo.delete_cleanup_items(categories)
-            snapshot = collect_assistant_snapshot(include_cleanup=True)
-            message = f"Freed {sysinfo.format_bytes(bytes_freed)}."
-            return AssistantActionResult(not errors, message, errors), snapshot
-
-        if kind == "refresh_startup":
-            snapshot = collect_assistant_snapshot(include_cleanup=False)
-            return AssistantActionResult(True, "Startup app list refreshed."), snapshot
-
-        if kind == "refresh_displays":
-            snapshot = collect_assistant_snapshot(include_cleanup=False)
-            return AssistantActionResult(True, "Display information refreshed."), snapshot
-
-        return AssistantActionResult(False, f"Unsupported action: {kind}"), self._snapshot
+        return execute_assistant_action(self._action, self._snapshot)
 
 
 class MessageBubble(QFrame):
@@ -642,21 +606,21 @@ class AssistantTab(QWidget):
             self.input_field.setFocus()
 
     def _run_action(self, action, card):
-        if action.kind in {"refresh_audio", "refresh_layouts"}:
+        if action.kind in TAB_ACTION_KINDS:
             self.action_requested.emit(action.kind, action.payload)
             self._add_message("system", f"Requested: {action.title}.")
             return
 
-        if action.kind == "clean_cleanup_candidates":
+        if action.requires_confirmation:
             reply = QMessageBox.question(
                 self,
-                "Confirm Cleanup",
+                "Confirm Assistant Action",
                 f"{action.description}\n\nContinue?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
             if reply != QMessageBox.Yes:
-                self._add_message("system", "Cleanup action cancelled.")
+                self._add_message("system", "Assistant action cancelled.")
                 return
 
         if self._worker_is_running(self._action_worker):

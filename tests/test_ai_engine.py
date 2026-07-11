@@ -161,8 +161,25 @@ def _mock_sysinfo_happy():
             "free": 180 * 1024**3,
             "percent": 65.0,
         }]),
+        "get_network_counters": MagicMock(return_value={"bytes_sent": 1024, "bytes_recv": 2048}),
+        "get_hardware_info": MagicMock(return_value={
+            "cpu": [{"Name": "Test CPU"}],
+            "gpu": [{"Name": "Test GPU"}],
+            "system": [],
+            "board": [],
+            "bios": [],
+            "os": [],
+            "disk_drives": [],
+            "physical_disks": [],
+            "memory_modules": [],
+            "logical_cores": 8,
+            "physical_cores": 4,
+        }),
         "get_startup_items": MagicMock(return_value=[
             {"name": "OneDrive", "command": "onedrive.exe", "source": "HKCU\\...\\Run"},
+        ]),
+        "get_installed_programs": MagicMock(return_value=[
+            {"name": "Example App", "publisher": "Example", "size_bytes": 1024**3},
         ]),
         "get_top_processes": MagicMock(return_value=[
             {"pid": 1, "name": "chrome.exe", "cpu": 12.4, "mem": 1.2 * 1024**3},
@@ -250,9 +267,14 @@ def test_build_system_context_total_failure():
          patch("app.assistant_core.sysinfo.get_cpu_stats", failing), \
          patch("app.assistant_core.sysinfo.get_memory_stats", failing), \
          patch("app.assistant_core.sysinfo.get_disk_usage", failing), \
+         patch("app.assistant_core.sysinfo.get_network_counters", failing), \
+         patch("app.assistant_core.sysinfo.get_hardware_info", failing), \
          patch("app.assistant_core.sysinfo.get_startup_items", failing), \
+         patch("app.assistant_core.sysinfo.get_installed_programs", failing), \
          patch("app.assistant_core.sysinfo.get_top_processes", failing), \
-         patch("app.assistant_core.sysinfo.get_display_devices", failing):
+         patch("app.assistant_core.sysinfo.get_display_devices", failing), \
+         patch("app.assistant_core._audio_snapshot", failing), \
+         patch("app.assistant_core._layout_snapshot", failing):
         context = build_system_context()
 
     assert context == SNAPSHOT_UNAVAILABLE

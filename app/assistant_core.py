@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import uuid4
@@ -11,10 +12,16 @@ class AssistantSnapshot:
     cpu: dict | None = None
     memory: dict | None = None
     disks: list = field(default_factory=list)
+    network: dict | None = None
+    hardware_summary: dict = field(default_factory=dict)
     startup_items: list = field(default_factory=list)
+    installed_programs_summary: dict = field(default_factory=dict)
     top_cpu_processes: list = field(default_factory=list)
     top_memory_processes: list = field(default_factory=list)
     displays: list = field(default_factory=list)
+    audio_devices: list = field(default_factory=list)
+    audio_sessions: list = field(default_factory=list)
+    saved_layouts: list = field(default_factory=list)
     cleanup_categories: list = field(default_factory=list)
     unavailable: list = field(default_factory=list)
 
@@ -37,6 +44,8 @@ class AssistantAction:
     payload: dict = field(default_factory=dict)
     confirm_label: str = "Confirm"
     cancel_label: str = "Cancel"
+    requires_confirmation: bool = False
+    handler: str = "local"
 
 
 @dataclass
@@ -46,16 +55,181 @@ class AssistantActionResult:
     errors: list = field(default_factory=list)
 
 
-def _action(kind, title, description, risk="Low", payload=None, confirm_label="Confirm"):
+@dataclass(frozen=True)
+class AssistantTool:
+    kind: str
+    title: str
+    description: str
+    risk: str = "Read-only"
+    handler: str = "local"
+    requires_confirmation: bool = False
+    payload_schema: dict = field(default_factory=dict)
+    confirm_label: str = "Run"
+    keywords: tuple = field(default_factory=tuple)
+
+
+READ_ONLY = "Read-only"
+LOW_RISK = "Low"
+MEDIUM_RISK = "Medium"
+HIGH_RISK = "High"
+
+ASSISTANT_TOOLS = {
+    "refresh_snapshot": AssistantTool(
+        "refresh_snapshot",
+        "Refresh PC snapshot",
+        "Collect fresh CPU, RAM, disk, startup, process, display, network, hardware, audio, and layout details.",
+        confirm_label="Refresh",
+        keywords=("health", "slow", "cpu", "ram", "memory", "disk", "space", "snapshot", "status"),
+    ),
+    "inspect_top_processes": AssistantTool(
+        "inspect_top_processes",
+        "Show top CPU/RAM processes",
+        "Refresh the process list so the assistant can focus on the busiest apps.",
+        confirm_label="Inspect",
+        keywords=("process", "processes", "task", "tasks", "cpu", "ram", "memory", "slow"),
+    ),
+    "refresh_network": AssistantTool(
+        "refresh_network",
+        "Refresh network activity",
+        "Collect current sent and received network counters.",
+        confirm_label="Refresh",
+        keywords=("network", "internet", "wifi", "ethernet", "upload", "download"),
+    ),
+    "refresh_hardware": AssistantTool(
+        "refresh_hardware",
+        "Refresh hardware summary",
+        "Collect a high-level CPU, GPU, memory, disk, motherboard, BIOS, and OS summary.",
+        confirm_label="Refresh",
+        keywords=("hardware", "gpu", "bios", "motherboard", "pc setup", "spec", "specs"),
+    ),
+    "refresh_startup": AssistantTool(
+        "refresh_startup",
+        "Refresh startup and programs",
+        "Reload startup entries and installed-program summary.",
+        confirm_label="Refresh",
+        keywords=("startup", "program", "programs", "installed", "launch", "boot"),
+    ),
+    "refresh_displays": AssistantTool(
+        "refresh_displays",
+        "Refresh display information",
+        "Reload connected monitors, current modes, and supported refresh rates.",
+        handler="tab",
+        confirm_label="Refresh",
+        keywords=("display", "monitor", "refresh rate", "screen"),
+    ),
+    "refresh_audio": AssistantTool(
+        "refresh_audio",
+        "Refresh audio information",
+        "Reload playback devices and active app audio sessions.",
+        handler="tab",
+        confirm_label="Refresh",
+        keywords=("audio", "sound", "speaker", "volume", "mute", "route"),
+    ),
+    "refresh_layouts": AssistantTool(
+        "refresh_layouts",
+        "Refresh layouts",
+        "Reload open windows and saved window layouts.",
+        handler="tab",
+        confirm_label="Refresh",
+        keywords=("layout", "layouts", "window", "windows", "desktop"),
+    ),
+    "scan_cleanup": AssistantTool(
+        "scan_cleanup",
+        "Scan safe cleanup locations",
+        "Scan known temp, browser cache, thumbnail cache, and Recycle Bin locations.",
+        confirm_label="Scan",
+        keywords=("clean", "cleanup", "junk", "temp", "cache", "free space"),
+    ),
+    "clean_cleanup_candidates": AssistantTool(
+        "clean_cleanup_candidates",
+        "Clean scanned safe categories",
+        "Delete only cleanup categories that were already scanned and shown to you.",
+        risk=MEDIUM_RISK,
+        requires_confirmation=True,
+        payload_schema={"category_keys": "list[str]"},
+        confirm_label="Clean",
+        keywords=("clean", "cleanup", "delete", "junk", "temp", "cache", "free space"),
+    ),
+    "set_display_refresh_rate": AssistantTool(
+        "set_display_refresh_rate",
+        "Change display refresh rate",
+        "Change only the selected monitor refresh rate, leaving resolution and scaling untouched.",
+        risk=MEDIUM_RISK,
+        requires_confirmation=True,
+        payload_schema={"device_name": "str", "hz": "int"},
+        confirm_label="Change",
+        keywords=("refresh rate", "hz", "hertz", "monitor"),
+    ),
+    "audio_set_volume": AssistantTool(
+        "audio_set_volume",
+        "Set app volume",
+        "Set one active audio session to the requested volume.",
+        risk=LOW_RISK,
+        requires_confirmation=True,
+        payload_schema={"pid": "int", "level": "float"},
+        confirm_label="Set Volume",
+        keywords=("volume", "louder", "quieter"),
+    ),
+    "audio_mute_session": AssistantTool(
+        "audio_mute_session",
+        "Mute app audio",
+        "Mute one active audio session.",
+        risk=LOW_RISK,
+        requires_confirmation=True,
+        payload_schema={"pid": "int", "muted": "bool"},
+        confirm_label="Mute",
+        keywords=("mute", "silence"),
+    ),
+    "audio_route_session": AssistantTool(
+        "audio_route_session",
+        "Route app audio",
+        "Route one active audio session to a specific playback device.",
+        risk=LOW_RISK,
+        requires_confirmation=True,
+        payload_schema={"pid": "int", "process_name": "str", "device_id": "str"},
+        confirm_label="Route",
+        keywords=("route", "speaker", "headphone", "output"),
+    ),
+    "load_saved_layout": AssistantTool(
+        "load_saved_layout",
+        "Load saved layout",
+        "Move matching windows and launch missing apps when possible for a saved layout.",
+        risk=MEDIUM_RISK,
+        requires_confirmation=True,
+        payload_schema={"layout_id": "str"},
+        confirm_label="Load",
+        keywords=("load layout", "restore layout", "arrange windows"),
+    ),
+}
+
+TAB_ACTION_KINDS = {
+    kind
+    for kind, tool in ASSISTANT_TOOLS.items()
+    if tool.handler == "tab"
+}
+
+
+def _tool(kind):
+    return ASSISTANT_TOOLS[kind]
+
+
+def _action(kind, title=None, description=None, risk=None, payload=None, confirm_label=None):
+    tool = _tool(kind)
     return AssistantAction(
         id=str(uuid4()),
         kind=kind,
-        title=title,
-        description=description,
-        risk=risk,
+        title=title or tool.title,
+        description=description or tool.description,
+        risk=risk or tool.risk,
         payload=payload or {},
-        confirm_label=confirm_label,
+        confirm_label=confirm_label or tool.confirm_label,
+        requires_confirmation=tool.requires_confirmation,
+        handler=tool.handler,
     )
+
+
+def get_assistant_tools():
+    return dict(ASSISTANT_TOOLS)
 
 
 def collect_assistant_snapshot(include_cleanup=False):
@@ -82,9 +256,26 @@ def collect_assistant_snapshot(include_cleanup=False):
         snapshot.unavailable.append("disks")
 
     try:
+        snapshot.network = sysinfo.get_network_counters()
+    except Exception:
+        snapshot.unavailable.append("network")
+
+    try:
+        hardware = sysinfo.get_hardware_info()
+        snapshot.hardware_summary = _hardware_summary(hardware)
+    except Exception:
+        snapshot.unavailable.append("hardware")
+
+    try:
         snapshot.startup_items = sysinfo.get_startup_items()
     except Exception:
         snapshot.unavailable.append("startup apps")
+
+    try:
+        programs = sysinfo.get_installed_programs()
+        snapshot.installed_programs_summary = _program_summary(programs)
+    except Exception:
+        snapshot.unavailable.append("installed programs")
 
     try:
         snapshot.top_cpu_processes = sysinfo.get_top_processes(limit=5, sort_by="cpu")
@@ -99,20 +290,37 @@ def collect_assistant_snapshot(include_cleanup=False):
     try:
         displays = []
         for device in sysinfo.get_display_devices()[:3]:
+            mode = None
             try:
                 mode = sysinfo.get_current_display_mode(device.name)
                 mode_text = f"{mode.width}x{mode.height} @ {mode.refresh_hz} Hz"
             except Exception:
                 mode_text = "mode unavailable"
+            try:
+                rates = sysinfo.get_supported_refresh_rates(device.name)
+            except Exception:
+                rates = []
             displays.append({
                 "name": device.name,
                 "label": device.label,
                 "primary": bool(device.is_primary),
                 "mode": mode_text,
+                "current_hz": mode.refresh_hz if mode else None,
+                "supported_rates": rates,
             })
         snapshot.displays = displays
     except Exception:
         snapshot.unavailable.append("displays")
+
+    try:
+        snapshot.audio_devices, snapshot.audio_sessions = _audio_snapshot()
+    except Exception:
+        snapshot.unavailable.append("audio")
+
+    try:
+        snapshot.saved_layouts = _layout_snapshot()
+    except Exception:
+        snapshot.unavailable.append("layouts")
 
     if include_cleanup:
         try:
@@ -123,6 +331,89 @@ def collect_assistant_snapshot(include_cleanup=False):
     return snapshot
 
 
+def _hardware_summary(hardware):
+    def first_name(items, *keys):
+        for item in items or []:
+            for key in keys:
+                value = item.get(key) if isinstance(item, dict) else None
+                if value:
+                    return str(value)
+        return ""
+
+    disks = hardware.get("disk_drives") or hardware.get("physical_disks") or []
+    memory_modules = hardware.get("memory_modules") or []
+    return {
+        "cpu": first_name(hardware.get("cpu"), "Name", "name"),
+        "gpu": first_name(hardware.get("gpu"), "Name", "name"),
+        "system": first_name(hardware.get("system"), "Model", "Name", "model", "name"),
+        "board": first_name(hardware.get("board"), "Product", "Name", "product", "name"),
+        "bios": first_name(hardware.get("bios"), "SMBIOSBIOSVersion", "Name", "Version", "version"),
+        "os": first_name(hardware.get("os"), "Caption", "Name", "caption", "name"),
+        "logical_cores": hardware.get("logical_cores"),
+        "physical_cores": hardware.get("physical_cores"),
+        "disk_count": len(disks),
+        "memory_module_count": len(memory_modules),
+    }
+
+
+def _program_summary(programs):
+    publishers = {}
+    for program in programs:
+        publisher = str(program.get("publisher") or "Unknown")
+        publishers[publisher] = publishers.get(publisher, 0) + 1
+    top_publishers = sorted(publishers.items(), key=lambda item: item[1], reverse=True)[:3]
+    largest = sorted(programs, key=lambda item: item.get("size_bytes") or 0, reverse=True)[:3]
+    return {
+        "count": len(programs),
+        "top_publishers": top_publishers,
+        "largest": [
+            {
+                "name": item.get("name", ""),
+                "size_bytes": item.get("size_bytes") or 0,
+            }
+            for item in largest
+            if item.get("size_bytes")
+        ],
+    }
+
+
+def _audio_snapshot():
+    from app import audio_control
+
+    devices = [
+        {"id": device.id, "name": device.name, "is_default": bool(device.is_default)}
+        for device in audio_control.list_output_devices()
+    ]
+    sessions = [
+        {
+            "pid": session.pid,
+            "process_name": session.process_name,
+            "display_name": session.display_name,
+            "device_id": session.device_id,
+            "device_name": session.device_name,
+            "volume": session.volume,
+            "muted": session.muted,
+        }
+        for session in audio_control.list_output_sessions()
+    ]
+    return devices, sessions
+
+
+def _layout_snapshot():
+    from app import window_layouts
+
+    layouts = []
+    for layout in window_layouts.load_layouts()[:8]:
+        layouts.append({
+            "id": layout.get("id", ""),
+            "name": layout.get("name", "Untitled Layout"),
+            "windows": len(layout.get("windows", [])),
+            "displays": len(layout.get("displays", [])),
+            "updated_at": layout.get("updated_at", ""),
+        })
+    return layouts
+
+
 def snapshot_has_useful_data(snapshot):
     return any([
         snapshot.cpu,
@@ -131,7 +422,13 @@ def snapshot_has_useful_data(snapshot):
         snapshot.startup_items,
         snapshot.top_cpu_processes,
         snapshot.top_memory_processes,
+        snapshot.network,
+        snapshot.hardware_summary,
+        snapshot.installed_programs_summary,
         snapshot.displays,
+        snapshot.audio_devices,
+        snapshot.audio_sessions,
+        snapshot.saved_layouts,
         snapshot.cleanup_categories,
     ])
 
@@ -168,12 +465,44 @@ def render_snapshot_context(snapshot):
     else:
         lines.append("Disk: unavailable")
 
+    if snapshot.network:
+        lines.append(
+            f"Network counters: sent {sysinfo.format_bytes(snapshot.network['bytes_sent'])}, "
+            f"received {sysinfo.format_bytes(snapshot.network['bytes_recv'])}"
+        )
+    elif "network" in snapshot.unavailable:
+        lines.append("Network: unavailable")
+
+    if snapshot.hardware_summary:
+        hardware = snapshot.hardware_summary
+        if hardware.get("cpu"):
+            lines.append(f"Hardware CPU: {hardware['cpu']}")
+        if hardware.get("gpu"):
+            lines.append(f"Hardware GPU: {hardware['gpu']}")
+        if hardware.get("logical_cores"):
+            lines.append(
+                f"CPU cores: {hardware.get('physical_cores') or '?'} physical, "
+                f"{hardware['logical_cores']} logical"
+            )
+    elif "hardware" in snapshot.unavailable:
+        lines.append("Hardware: unavailable")
+
     if "startup apps" in snapshot.unavailable:
         lines.append("Startup apps: unavailable")
     else:
         lines.append(f"Startup apps: {len(snapshot.startup_items)} detected")
         for item in snapshot.startup_items[:5]:
             lines.append(f"- Startup: {item['name']} ({item['source']})")
+
+    if snapshot.installed_programs_summary:
+        program_count = snapshot.installed_programs_summary.get("count", 0)
+        lines.append(f"Installed programs: {program_count} detected")
+        for program in snapshot.installed_programs_summary.get("largest", [])[:3]:
+            lines.append(
+                f"- Large program: {program['name']} ({sysinfo.format_bytes(program['size_bytes'])})"
+            )
+    elif "installed programs" in snapshot.unavailable:
+        lines.append("Installed programs: unavailable")
 
     if snapshot.top_cpu_processes:
         lines.append("Top processes (by CPU):")
@@ -202,6 +531,26 @@ def render_snapshot_context(snapshot):
         lines.append("Displays: unavailable")
     else:
         lines.append("Displays: 0 connected")
+
+    if snapshot.audio_devices or snapshot.audio_sessions:
+        lines.append(
+            f"Audio: {len(snapshot.audio_devices)} playback device(s), "
+            f"{len(snapshot.audio_sessions)} active session(s)"
+        )
+        for session in snapshot.audio_sessions[:5]:
+            muted = "muted" if session.get("muted") else f"{session.get('volume', 0) * 100:.0f}%"
+            lines.append(f"- Audio: {session['display_name']} on {session.get('device_name') or 'default'} ({muted})")
+    elif "audio" in snapshot.unavailable:
+        lines.append("Audio: unavailable")
+
+    if snapshot.saved_layouts:
+        lines.append(f"Saved layouts: {len(snapshot.saved_layouts)} available")
+        for layout in snapshot.saved_layouts[:5]:
+            lines.append(
+                f"- Layout: {layout['name']} ({layout['windows']} windows, {layout['displays']} displays)"
+            )
+    elif "layouts" in snapshot.unavailable:
+        lines.append("Layouts: unavailable")
 
     if snapshot.cleanup_categories:
         total = sum(cat.size_bytes for cat in snapshot.cleanup_categories)
@@ -258,7 +607,16 @@ def snapshot_summary_rows(snapshot):
         rows.append(("Disks", "Unavailable"))
 
     rows.append(("Startup", f"{len(snapshot.startup_items)} item(s)"))
+    if snapshot.installed_programs_summary:
+        rows.append(("Programs", f"{snapshot.installed_programs_summary.get('count', 0)} installed"))
+    if snapshot.network:
+        rows.append(("Network", f"{sysinfo.format_bytes(snapshot.network['bytes_recv'])} received"))
+    if snapshot.hardware_summary:
+        cpu = snapshot.hardware_summary.get("cpu") or "Available"
+        rows.append(("Hardware", cpu))
     rows.append(("Displays", f"{len(snapshot.displays)} connected"))
+    rows.append(("Audio", f"{len(snapshot.audio_sessions)} session(s)"))
+    rows.append(("Layouts", f"{len(snapshot.saved_layouts)} saved"))
 
     if snapshot.cleanup_categories:
         total = sum(cat.size_bytes for cat in snapshot.cleanup_categories)
@@ -279,64 +637,249 @@ def snapshot_summary_rows(snapshot):
 def propose_actions(user_text, snapshot=None):
     lowered = user_text.lower()
     actions = []
+    added = set()
 
-    if any(word in lowered for word in ("health", "slow", "cpu", "ram", "memory", "disk", "space")):
-        actions.append(_action(
-            "refresh_snapshot",
-            "Refresh PC snapshot",
-            "Collect fresh CPU, RAM, disk, startup, process, and display details for the assistant.",
-            confirm_label="Refresh",
-        ))
+    def add(kind, **kwargs):
+        if kind in added:
+            return
+        actions.append(_action(kind, **kwargs))
+        added.add(kind)
 
-    if any(word in lowered for word in ("clean", "cleanup", "junk", "temp", "cache", "free space")):
+    for kind, tool in ASSISTANT_TOOLS.items():
+        if kind in {
+            "clean_cleanup_candidates",
+            "set_display_refresh_rate",
+            "audio_set_volume",
+            "audio_mute_session",
+            "audio_route_session",
+            "load_saved_layout",
+        }:
+            continue
+        if _matches_any(lowered, tool.keywords):
+            add(kind)
+
+    if _matches_any(lowered, ("clean", "cleanup", "junk", "temp", "cache", "free space")):
         if snapshot and snapshot.cleanup_categories:
             total = sum(cat.size_bytes for cat in snapshot.cleanup_categories)
-            actions.append(_action(
+            add(
                 "clean_cleanup_candidates",
-                "Clean scanned safe categories",
-                f"Delete the scanned temp/cache categories shown in the snapshot ({sysinfo.format_bytes(total)}).",
-                risk="Medium",
+                description=f"Delete the scanned temp/cache categories shown in the snapshot ({sysinfo.format_bytes(total)}).",
                 payload={"category_keys": [cat.key for cat in snapshot.cleanup_categories]},
-                confirm_label="Clean",
-            ))
+            )
         else:
-            actions.append(_action(
-                "scan_cleanup",
-                "Scan safe cleanup locations",
-                "Scan known temp, browser cache, thumbnail cache, and Recycle Bin locations.",
-                confirm_label="Scan",
-            ))
+            add("scan_cleanup")
 
-    if "startup" in lowered:
-        actions.append(_action(
-            "refresh_startup",
-            "Refresh startup apps",
-            "Reload startup entries so the assistant can review the latest list.",
-            confirm_label="Refresh",
-        ))
+    if snapshot:
+        display_action = _display_refresh_action(lowered, snapshot)
+        if display_action:
+            add(display_action.kind, description=display_action.description, payload=display_action.payload)
 
-    if "display" in lowered or "refresh rate" in lowered or "monitor" in lowered:
-        actions.append(_action(
-            "refresh_displays",
-            "Refresh display information",
-            "Reload connected monitors and current display modes.",
-            confirm_label="Refresh",
-        ))
+        audio_action = _audio_action(lowered, snapshot)
+        if audio_action:
+            add(audio_action.kind, description=audio_action.description, payload=audio_action.payload)
 
-    if "audio" in lowered or "sound" in lowered or "speaker" in lowered:
-        actions.append(_action(
-            "refresh_audio",
-            "Refresh audio information",
-            "Ask the Audio tab to reload devices and active app sessions.",
-            confirm_label="Refresh",
-        ))
-
-    if "layout" in lowered or "window" in lowered:
-        actions.append(_action(
-            "refresh_layouts",
-            "Refresh layouts",
-            "Ask the Layouts tab to rescan open windows and saved layouts.",
-            confirm_label="Refresh",
-        ))
+        layout_action = _layout_action(lowered, snapshot)
+        if layout_action:
+            add(layout_action.kind, description=layout_action.description, payload=layout_action.payload)
 
     return actions
+
+
+def _matches_any(text, keywords):
+    return any(keyword in text for keyword in keywords)
+
+
+def _display_refresh_action(lowered, snapshot):
+    if not _matches_any(lowered, ("highest refresh", "max refresh", "maximum refresh", "change refresh", "set refresh")):
+        return None
+    displays = [display for display in snapshot.displays if display.get("supported_rates")]
+    if not displays:
+        return None
+    display = next((item for item in displays if item.get("primary")), displays[0])
+    current_hz = display.get("current_hz")
+    target_hz = max(display.get("supported_rates") or [])
+    if current_hz and int(target_hz) == int(current_hz):
+        return None
+    return _action(
+        "set_display_refresh_rate",
+        description=f"Change {display['label']} to {target_hz} Hz.",
+        payload={"device_name": display["name"], "hz": int(target_hz)},
+    )
+
+
+def _audio_action(lowered, snapshot):
+    sessions = snapshot.audio_sessions
+    if len(sessions) != 1:
+        return None
+    session = sessions[0]
+    if "unmute" in lowered:
+        return _action(
+            "audio_mute_session",
+            title="Unmute app audio",
+            description=f"Unmute {session['display_name']}.",
+            payload={"pid": session["pid"], "muted": False},
+            confirm_label="Unmute",
+        )
+    if "mute" in lowered or "silence" in lowered:
+        return _action(
+            "audio_mute_session",
+            description=f"Mute {session['display_name']}.",
+            payload={"pid": session["pid"], "muted": True},
+        )
+    volume = _requested_volume(lowered)
+    if volume is not None:
+        return _action(
+            "audio_set_volume",
+            description=f"Set {session['display_name']} volume to {int(volume * 100)}%.",
+            payload={"pid": session["pid"], "level": volume},
+        )
+    if "route" in lowered and len(snapshot.audio_devices) == 1:
+        device = snapshot.audio_devices[0]
+        return _action(
+            "audio_route_session",
+            description=f"Route {session['display_name']} to {device['name']}.",
+            payload={
+                "pid": session["pid"],
+                "process_name": session["process_name"],
+                "device_id": device["id"],
+            },
+        )
+    return None
+
+
+def _requested_volume(text):
+    match = re.search(r"(\d{1,3})\s*%", text)
+    if not match:
+        return None
+    value = max(0, min(100, int(match.group(1))))
+    return value / 100.0
+
+
+def _layout_action(lowered, snapshot):
+    if not _matches_any(lowered, ("load layout", "restore layout", "arrange windows")):
+        return None
+    if not snapshot.saved_layouts:
+        return None
+    layout = snapshot.saved_layouts[0]
+    return _action(
+        "load_saved_layout",
+        description=f"Load saved layout \"{layout['name']}\".",
+        payload={"layout_id": layout["id"]},
+    )
+
+
+def execute_assistant_action(action, snapshot=None):
+    kind = action.kind
+    if kind in {
+        "refresh_snapshot",
+        "inspect_top_processes",
+        "refresh_network",
+        "refresh_hardware",
+        "refresh_startup",
+        "refresh_displays",
+    }:
+        refreshed = collect_assistant_snapshot(include_cleanup=False)
+        messages = {
+            "refresh_snapshot": "PC snapshot refreshed.",
+            "inspect_top_processes": "Top CPU/RAM processes refreshed.",
+            "refresh_network": "Network activity refreshed.",
+            "refresh_hardware": "Hardware summary refreshed.",
+            "refresh_startup": "Startup and installed-program summary refreshed.",
+            "refresh_displays": "Display information refreshed.",
+        }
+        return AssistantActionResult(True, messages[kind]), refreshed
+
+    if kind == "scan_cleanup":
+        refreshed = collect_assistant_snapshot(include_cleanup=True)
+        total = sum(cat.size_bytes for cat in refreshed.cleanup_categories)
+        message = (
+            f"Found {sysinfo.format_bytes(total)} across "
+            f"{len(refreshed.cleanup_categories)} cleanup categor(ies)."
+        )
+        return AssistantActionResult(True, message), refreshed
+
+    if kind == "clean_cleanup_candidates":
+        if not snapshot:
+            return AssistantActionResult(False, "No cleanup scan is available."), snapshot
+        keys = set(action.payload.get("category_keys", []))
+        categories = [cat for cat in snapshot.cleanup_categories if cat.key in keys]
+        if not categories:
+            return AssistantActionResult(False, "No matching cleanup categories are available."), snapshot
+        bytes_freed, errors = sysinfo.delete_cleanup_items(categories)
+        refreshed = collect_assistant_snapshot(include_cleanup=True)
+        message = f"Freed {sysinfo.format_bytes(bytes_freed)}."
+        return AssistantActionResult(not errors, message, errors), refreshed
+
+    if kind == "set_display_refresh_rate":
+        device_name = action.payload.get("device_name", "")
+        hz = action.payload.get("hz")
+        if not device_name or hz is None:
+            return AssistantActionResult(False, "No display and refresh rate were selected."), snapshot
+        result = sysinfo.set_display_refresh_rate(device_name, int(hz))
+        refreshed = collect_assistant_snapshot(include_cleanup=False) if result.success else snapshot
+        return AssistantActionResult(result.success, result.message), refreshed
+
+    if kind in {"audio_set_volume", "audio_mute_session", "audio_route_session"}:
+        result = _execute_audio_action(action)
+        refreshed = collect_assistant_snapshot(include_cleanup=False) if result.success else snapshot
+        return result, refreshed
+
+    if kind == "load_saved_layout":
+        result = _execute_layout_action(action, snapshot)
+        refreshed = collect_assistant_snapshot(include_cleanup=False) if result.success else snapshot
+        return result, refreshed
+
+    return AssistantActionResult(False, f"Unsupported action: {kind}"), snapshot
+
+
+def _execute_audio_action(action):
+    from app import audio_control
+
+    pid = int(action.payload.get("pid") or 0)
+    if pid <= 0:
+        return AssistantActionResult(False, "No audio session was selected.")
+
+    if action.kind == "audio_set_volume":
+        level = max(0.0, min(1.0, float(action.payload.get("level", 0))))
+        if audio_control.set_session_volume(pid, level):
+            return AssistantActionResult(True, f"Set app volume to {int(level * 100)}%.")
+        return AssistantActionResult(False, "Could not update session volume.")
+
+    if action.kind == "audio_mute_session":
+        muted = bool(action.payload.get("muted"))
+        if audio_control.set_session_mute(pid, muted):
+            return AssistantActionResult(True, "Muted app audio." if muted else "Unmuted app audio.")
+        return AssistantActionResult(False, "Could not update session mute.")
+
+    if action.kind == "audio_route_session":
+        device_id = action.payload.get("device_id", "")
+        process_name = action.payload.get("process_name", "")
+        route = audio_control.set_app_output_device(
+            process_id=pid,
+            process_name=process_name,
+            device=device_id,
+        )
+        return AssistantActionResult(route.success, route.message)
+
+    return AssistantActionResult(False, f"Unsupported audio action: {action.kind}")
+
+
+def _execute_layout_action(action, snapshot):
+    from app import window_layouts
+
+    layout_id = action.payload.get("layout_id", "")
+    layouts = window_layouts.load_layouts()
+    layout = next((item for item in layouts if item.get("id") == layout_id), None)
+    if not layout and snapshot:
+        layout_name = action.payload.get("layout_name", "")
+        layout = next((item for item in layouts if item.get("name") == layout_name), None)
+    if not layout:
+        return AssistantActionResult(False, "No saved layout was selected.")
+    result = window_layouts.apply_layout(layout, launch_missing=True)
+    parts = [f"Moved {result.moved} window(s)"]
+    if result.launched:
+        parts.append(f"launched {len(result.launched)} app(s)")
+    if result.missing:
+        parts.append(f"{len(result.missing)} window(s) missing")
+    errors = list(result.errors)
+    return AssistantActionResult(not errors, "Layout loaded: " + ", ".join(parts) + ".", errors)

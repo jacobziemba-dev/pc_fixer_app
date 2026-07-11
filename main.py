@@ -76,7 +76,11 @@ class MainWindow(QMainWindow):
         return real_tab
 
     def _on_assistant_action_requested(self, kind, payload):
-        if kind == "refresh_audio":
+        if kind == "refresh_displays":
+            tab = self._load_tab(2)
+            if hasattr(tab, "load"):
+                tab.load()
+        elif kind == "refresh_audio":
             tab = self._load_tab(3)
             if hasattr(tab, "load"):
                 tab.load()
@@ -86,6 +90,14 @@ class MainWindow(QMainWindow):
                 tab.load()
             if hasattr(tab, "refresh_current_layout"):
                 tab.refresh_current_layout()
+        elif kind == "refresh_startup":
+            tab = self._load_tab(5)
+            if hasattr(tab, "load"):
+                tab.load()
+        elif kind == "scan_cleanup":
+            tab = self._load_tab(7)
+            if hasattr(tab, "start_scan"):
+                tab.start_scan()
 
 
 def main():

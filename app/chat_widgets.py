@@ -16,16 +16,20 @@ class MessageBubble(QFrame):
     def __init__(self, role, text=""):
         super().__init__()
         self.setProperty("role", f"message-{role}")
-        max_width = 560 if role in ("user", "assistant") else 560
+        max_width = 760 if role == "assistant" else 520 if role == "user" else 620
         self.setMaximumWidth(max_width)
         self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setContentsMargins(18, 14, 18, 14)
         layout.setSpacing(0)
         self.text_label = QLabel(text)
+        self.text_label.setProperty("role", "message-text")
+        self.text_label.setProperty("tone", role)
+        self.text_label.setTextFormat(Qt.PlainText)
         self.text_label.setWordWrap(True)
-        self.text_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        interaction = Qt.NoTextInteraction if role == "user" else Qt.TextSelectableByMouse
+        self.text_label.setTextInteractionFlags(interaction)
         layout.addWidget(self.text_label)
 
     def append_text(self, text):
@@ -65,29 +69,34 @@ class ActionCard(QFrame):
         super().__init__()
         self._action = action
         self.setProperty("role", "action-card")
-        self.setMaximumWidth(760)
-        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Minimum)
+        self.setMaximumWidth(620)
+        self.setMinimumWidth(440)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(18, 14, 18, 14)
-        layout.setSpacing(14)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
 
-        icon = QLabel("*")
+        content = QHBoxLayout()
+        content.setSpacing(12)
+        icon = QLabel("✓")
         icon.setProperty("role", "action-icon")
         icon.setAlignment(Qt.AlignCenter)
-        layout.addWidget(icon, 0, Qt.AlignTop)
+        content.addWidget(icon, 0, Qt.AlignTop)
 
         copy = QVBoxLayout()
-        copy.setSpacing(4)
+        copy.setSpacing(5)
         title = QLabel("Suggested action")
         title.setProperty("role", "action-title")
         title.setWordWrap(True)
         copy.addWidget(title)
 
-        desc = QLabel(f"{action.title}: {action.description}")
+        desc = QLabel(f"{action.title}\n{action.description}")
         desc.setProperty("role", "action-description")
         desc.setWordWrap(True)
         copy.addWidget(desc)
+        content.addLayout(copy, 1)
+        layout.addLayout(content)
 
         target_text = self._target_text(action)
         detail_bits = []
@@ -97,23 +106,23 @@ class ActionCard(QFrame):
             "Confirmation required" if action.requires_confirmation else "Read-only"
         )
         detail_bits.append(f"Risk: {action.risk}")
-        meta = QLabel(" | ".join(detail_bits))
+        meta = QLabel("  •  ".join(detail_bits))
         meta.setProperty("role", "action-meta-value")
         meta.setWordWrap(True)
-        copy.addWidget(meta)
-        layout.addLayout(copy, 1)
+        layout.addWidget(meta)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
+        buttons.addStretch(1)
         self.cancel_btn = QPushButton(action.cancel_label)
-        self.cancel_btn.setProperty("variant", "secondary")
+        self.cancel_btn.setProperty("variant", "action-secondary")
         self.cancel_btn.clicked.connect(self._cancel)
         self.confirm_btn = QPushButton(action.confirm_label)
         self.confirm_btn.setProperty("variant", "action-confirm")
         self.confirm_btn.clicked.connect(self._confirm)
         buttons.addWidget(self.cancel_btn)
         buttons.addWidget(self.confirm_btn)
-        layout.addLayout(buttons, 0)
+        layout.addLayout(buttons)
 
     def _meta_row(self, label, value):
         row = QVBoxLayout()

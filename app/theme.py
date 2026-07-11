@@ -87,7 +87,28 @@ QGroupBox::title {
     padding: 0 6px;
 }
 QLabel {
+    background-color: transparent;
     color: #e6e6ec;
+}
+QLabel[role="message-text"] {
+    background-color: transparent;
+    color: #e9edf7;
+    font-size: 14px;
+    font-weight: 450;
+    selection-background-color: #294b78;
+    selection-color: #ffffff;
+}
+QLabel[role="message-text"][tone="user"] {
+    color: #f8fbff;
+    font-weight: 600;
+    selection-background-color: #d8e8ff;
+    selection-color: #07111f;
+}
+QLabel[role="message-text"][tone="system"] {
+    color: #d9f4da;
+}
+QLabel[role="message-text"][tone="error"] {
+    color: #ffe4e6;
 }
 QLabel[role="metric"] {
     font-size: 22px;
@@ -129,13 +150,14 @@ QLabel[role="status-chip"] {
     font-weight: 600;
 }
 QLabel[role="action-title"] {
-    color: #8ee66b;
-    font-size: 15px;
-    font-weight: 700;
+    color: #b8f28c;
+    font-size: 14px;
+    font-weight: 800;
 }
 QLabel[role="action-description"] {
-    color: #d8dce7;
+    color: #eef5e9;
     font-size: 13px;
+    font-weight: 600;
 }
 QLabel[role="action-meta-label"] {
     color: #aeb6d4;
@@ -143,9 +165,9 @@ QLabel[role="action-meta-label"] {
     font-weight: 700;
 }
 QLabel[role="action-meta-value"] {
-    color: #9da4b3;
+    color: #9fb29e;
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 600;
 }
 QLabel[role="snapshot-key"] {
     color: #f0f2fb;
@@ -169,39 +191,45 @@ QLabel[role="status-dot"][state="danger"] {
     background-color: #ff5c5c;
 }
 QLabel[role="action-icon"] {
-    color: #8ee66b;
-    font-size: 28px;
+    color: #07110b;
+    background-color: #8ee66b;
+    border: 1px solid #b8f28c;
+    border-radius: 11px;
+    font-size: 14px;
     font-weight: 900;
-    min-width: 32px;
+    min-width: 22px;
+    min-height: 22px;
+    max-width: 22px;
+    max-height: 22px;
 }
 QFrame[role="message-user"] {
     background: qlineargradient(
         x1:0, y1:0, x2:1, y2:1,
-        stop:0 #315a98,
-        stop:1 #243f70
+        stop:0 #2f6fbd,
+        stop:1 #214d86
     );
-    border: 1px solid #3e6fac;
-    border-top-left-radius: 12px;
-    border-top-right-radius: 12px;
-    border-bottom-left-radius: 12px;
-    border-bottom-right-radius: 4px;
+    border: 1px solid #4b88d7;
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    border-bottom-left-radius: 14px;
+    border-bottom-right-radius: 5px;
 }
 QFrame[role="message-assistant"] {
-    background-color: #151a22;
-    border: 1px solid #303744;
-    border-top-left-radius: 12px;
-    border-top-right-radius: 12px;
-    border-bottom-left-radius: 4px;
-    border-bottom-right-radius: 12px;
+    background-color: #121821;
+    border: 1px solid #303b4a;
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    border-bottom-left-radius: 5px;
+    border-bottom-right-radius: 14px;
 }
 QFrame[role="message-system"] {
-    background-color: #102119;
-    border: 1px solid #356d2c;
-    border-radius: 10px;
+    background-color: #102018;
+    border: 1px solid #326c38;
+    border-radius: 12px;
 }
 QFrame[role="message-error"] {
-    background-color: #3a2528;
-    border: 1px solid #704045;
+    background-color: #341f25;
+    border: 1px solid #7b444c;
     border-radius: 12px;
 }
 QFrame[role="chat-thread"] {
@@ -220,12 +248,13 @@ QFrame[role="missing-model"] {
 }
 QFrame[role="action-card"] {
     background: qlineargradient(
-        x1:0, y1:0, x2:1, y2:0,
-        stop:0 #102417,
-        stop:1 #0e1a12
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #122418,
+        stop:1 #0d1712
     );
-    border: 1px solid #3b7d2c;
-    border-radius: 8px;
+    border: 1px solid #2f7d35;
+    border-left: 4px solid #8ee66b;
+    border-radius: 10px;
 }
 QFrame[role="context-drawer"] {
     background-color: #0c1016;
@@ -372,6 +401,20 @@ QPushButton[variant="secondary"]:hover {
     background-color: #151c28;
     border-color: #3d4858;
 }
+QPushButton[variant="action-secondary"] {
+    background-color: #10151d;
+    border: 1px solid #344235;
+    border-radius: 8px;
+    color: #d8e4d8;
+    padding: 8px 14px;
+    min-width: 70px;
+    font-size: 12px;
+}
+QPushButton[variant="action-secondary"]:hover {
+    background-color: #162018;
+    border-color: #4e664c;
+    color: #ffffff;
+}
 QPushButton[variant="top-nav"] {
     background-color: transparent;
     border: none;
@@ -469,15 +512,18 @@ QPushButton[variant="chat-send"]:disabled {
     color: #6b6c78;
 }
 QPushButton[variant="action-confirm"] {
-    background-color: #102417;
-    border: 1px solid #4d993d;
-    color: #8ee66b;
+    background-color: #17391e;
+    border: 1px solid #66bd52;
+    color: #b8f28c;
     border-radius: 8px;
-    padding: 9px 18px;
+    padding: 8px 16px;
+    min-width: 70px;
+    font-size: 12px;
     font-weight: 700;
 }
 QPushButton[variant="action-confirm"]:hover {
-    background-color: #17311f;
+    background-color: #1f4b28;
+    border-color: #8ee66b;
 }
 QPushButton[variant="action-confirm"]:disabled {
     background-color: #2b2c35;

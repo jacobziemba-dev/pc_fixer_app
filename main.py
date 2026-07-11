@@ -1,8 +1,9 @@
 import sys
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QTabWidget, QWidget, QLabel, QVBoxLayout,
-    QLineEdit,
+    QApplication, QMainWindow, QWidget, QLabel, QVBoxLayout, QHBoxLayout,
+    QFrame, QPushButton, QStackedWidget, QToolButton, QMenu,
 )
 
 from app.theme import DARK_STYLESHEET
@@ -78,36 +79,154 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PC Fix - Performance & Cleanup")
-        self.resize(1080, 720)
+        self.resize(1360, 820)
 
-        self.tabs = QTabWidget()
-        self.tabs.addTab(DashboardTab(), "Dashboard")
-        self.tabs.addTab(_placeholder("Loading AI Chat..."), "AI Chat")
-        self.tabs.addTab(_placeholder("Loading Health..."), "Health")
-        self.tabs.addTab(_placeholder("Loading Cleanup..."), "Cleanup")
-        self.tabs.addTab(_placeholder("Loading Performance..."), "Performance")
-        self.tabs.addTab(_placeholder("Loading Network..."), "Network")
-        self.tabs.addTab(_placeholder("Loading Display..."), "Display")
-        self.tabs.addTab(_placeholder("Loading Audio..."), "Audio")
-        self.tabs.addTab(_placeholder("Loading Layouts..."), "Layouts")
-        self.tabs.addTab(_placeholder("Loading Startup & Programs..."), "Startup & Programs")
-        self.tabs.addTab(_placeholder("Loading PC Setup..."), "PC Setup")
-        self.tabs.addTab(_placeholder("Loading Reports..."), "Reports")
+        self._nav_buttons = []
+        self._top_nav_buttons = []
+        self._tab_titles = [
+            "Dashboard",
+            "AI Chat",
+            "Health",
+            "Cleanup",
+            "Performance",
+            "Network",
+            "Display",
+            "Audio",
+            "Layouts",
+            "Startup & Programs",
+            "PC Setup",
+            "Reports",
+        ]
+
+        self.stack = QStackedWidget()
+        self.stack.addWidget(DashboardTab())
+        self.stack.addWidget(_placeholder("Loading AI Chat..."))
+        self.stack.addWidget(_placeholder("Loading Health..."))
+        self.stack.addWidget(_placeholder("Loading Cleanup..."))
+        self.stack.addWidget(_placeholder("Loading Performance..."))
+        self.stack.addWidget(_placeholder("Loading Network..."))
+        self.stack.addWidget(_placeholder("Loading Display..."))
+        self.stack.addWidget(_placeholder("Loading Audio..."))
+        self.stack.addWidget(_placeholder("Loading Layouts..."))
+        self.stack.addWidget(_placeholder("Loading Startup & Programs..."))
+        self.stack.addWidget(_placeholder("Loading PC Setup..."))
+        self.stack.addWidget(_placeholder("Loading Reports..."))
 
         self._loaded_tabs = {0}  # Dashboard is eager
-        self.tabs.currentChanged.connect(self._ensure_tab_loaded)
+        self.stack.currentChanged.connect(self._ensure_tab_loaded)
 
-        shell = QWidget()
+        shell = QFrame()
+        shell.setProperty("role", "app-shell")
         shell_layout = QVBoxLayout(shell)
-        shell_layout.setContentsMargins(8, 8, 8, 8)
-        self.tool_search = QLineEdit()
-        self.tool_search.setPlaceholderText("Find a tool: chat, cleanup, network, disk, audio, report...")
-        self.tool_search.returnPressed.connect(self._jump_to_tool)
-        shell_layout.addWidget(self.tool_search)
-        shell_layout.addWidget(self.tabs, 1)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+        shell_layout.addWidget(self._build_top_bar())
+
+        content_layout = QHBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        content_layout.addWidget(self._build_sidebar())
+        content_layout.addWidget(self.stack, 1)
+        shell_layout.addLayout(content_layout, 1)
         self.setCentralWidget(shell)
+
         self.statusBar().showMessage("Ready")
-        get_job_queue().status_changed.connect(self.statusBar().showMessage)
+        get_job_queue().status_changed.connect(self._set_global_status)
+
+        self._go_to_tab(1)
+
+    def _build_top_bar(self):
+        top = QFrame()
+        top.setProperty("role", "top-bar")
+        layout = QHBoxLayout(top)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(14)
+
+        logo = QLabel("PC")
+        logo.setProperty("role", "app-logo")
+        logo.setAlignment(Qt.AlignCenter)
+        layout.addWidget(logo)
+
+        title = QLabel("PC Fix")
+        title.setProperty("role", "app-title")
+        layout.addWidget(title)
+        layout.addSpacing(70)
+
+        nav = QFrame()
+        nav.setProperty("role", "top-nav")
+        nav_layout = QHBoxLayout(nav)
+        nav_layout.setContentsMargins(6, 5, 6, 5)
+        nav_layout.setSpacing(6)
+        for index, label in ((0, "Dashboard"), (1, "AI Chat"), (3, "Cleanup")):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setProperty("variant", "top-nav")
+            button.clicked.connect(lambda checked=False, index=index: self._go_to_tab(index))
+            nav_layout.addWidget(button)
+            self._top_nav_buttons.append((index, button))
+        layout.addWidget(nav)
+
+        layout.addStretch(1)
+        self.global_status_chip = QLabel("Ready")
+        self.global_status_chip.setProperty("role", "status-chip")
+        layout.addWidget(self.global_status_chip)
+
+        self.global_context_btn = QToolButton()
+        self.global_context_btn.setText("PC Context")
+        self.global_context_btn.setCheckable(True)
+        self.global_context_btn.setChecked(True)
+        self.global_context_btn.setProperty("role", "header-menu-btn")
+        self.global_context_btn.toggled.connect(self._toggle_assistant_context)
+        layout.addWidget(self.global_context_btn)
+
+        self.global_menu_btn = QToolButton()
+        self.global_menu_btn.setText("Menu")
+        self.global_menu_btn.setProperty("role", "header-menu-btn")
+        self.global_menu_btn.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(self.global_menu_btn)
+        menu.addAction("Clear AI Chat", self._clear_assistant_chat)
+        menu.addAction("Recheck AI Model", self._recheck_assistant_model)
+        menu.addAction("Open Reports", lambda: self._go_to_tab(11))
+        self.global_menu_btn.setMenu(menu)
+        layout.addWidget(self.global_menu_btn)
+        return top
+
+    def _build_sidebar(self):
+        sidebar = QFrame()
+        sidebar.setProperty("role", "side-bar")
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(10, 16, 10, 14)
+        layout.setSpacing(10)
+
+        for index, label in (
+            (1, "AI Chat"),
+            (0, "Dashboard"),
+            (3, "Cleanup"),
+            (9, "Startup"),
+            (2, "Tools"),
+            (11, "Settings"),
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setProperty("variant", "side-nav")
+            button.clicked.connect(lambda checked=False, index=index: self._go_to_tab(index))
+            layout.addWidget(button)
+            self._nav_buttons.append((index, button))
+
+        layout.addStretch(1)
+        protected = QFrame()
+        protected.setProperty("role", "protected-card")
+        protected_layout = QVBoxLayout(protected)
+        protected_layout.setContentsMargins(14, 14, 14, 14)
+        protected_layout.setSpacing(6)
+        protected_title = QLabel("Protected")
+        protected_title.setProperty("role", "protected-title")
+        protected_layout.addWidget(protected_title)
+        protected_caption = QLabel("Windows 11 Pro\nBuild 22631")
+        protected_caption.setProperty("role", "caption")
+        protected_layout.addWidget(protected_caption)
+        layout.addWidget(protected)
+        return sidebar
 
     def _ensure_tab_loaded(self, index):
         if index in self._loaded_tabs or index not in _LAZY_TABS:
@@ -116,7 +235,7 @@ class MainWindow(QMainWindow):
 
     def _load_tab(self, index, make_current=False):
         if index in self._loaded_tabs or index not in _LAZY_TABS:
-            return self.tabs.widget(index)
+            return self.stack.widget(index)
         module_name, class_name, title = _LAZY_TABS[index]
         module = __import__(module_name, fromlist=[class_name])
         tab_cls = getattr(module, class_name)
@@ -126,17 +245,64 @@ class MainWindow(QMainWindow):
         if hasattr(real_tab, "status_changed"):
             real_tab.status_changed.connect(self.statusBar().showMessage)
 
-        current_widget = self.tabs.currentWidget()
-        self.tabs.blockSignals(True)
-        self.tabs.removeTab(index)
-        self.tabs.insertTab(index, real_tab, title)
+        current_index = self.stack.currentIndex()
+        old_widget = self.stack.widget(index)
+        self.stack.blockSignals(True)
+        self.stack.removeWidget(old_widget)
+        old_widget.deleteLater()
+        self.stack.insertWidget(index, real_tab)
         if make_current:
-            self.tabs.setCurrentIndex(index)
-        elif current_widget is not None:
-            self.tabs.setCurrentWidget(current_widget)
-        self.tabs.blockSignals(False)
+            self.stack.setCurrentIndex(index)
+        else:
+            self.stack.setCurrentIndex(current_index)
+        self.stack.blockSignals(False)
         self._loaded_tabs.add(index)
         return real_tab
+
+    def _go_to_tab(self, index):
+        self.stack.setCurrentIndex(index)
+        self._ensure_tab_loaded(index)
+        self._sync_nav(index)
+        self.statusBar().showMessage(f"Opened {self._tab_titles[index]}")
+
+    def _sync_nav(self, index):
+        for tab_index, button in self._nav_buttons + self._top_nav_buttons:
+            button.setChecked(tab_index == index)
+        self.global_context_btn.setVisible(index == 1)
+        self.global_context_btn.setChecked(self._assistant_context_visible())
+
+    def _set_global_status(self, message):
+        self.statusBar().showMessage(message)
+        self.global_status_chip.setText(message or "Ready")
+
+    def _assistant_tab(self):
+        self._load_tab(1)
+        return self.stack.widget(1)
+
+    def _assistant_context_visible(self):
+        tab = self.stack.widget(1)
+        drawer = getattr(tab, "context_drawer", None)
+        return bool(drawer and not drawer.isHidden())
+
+    def _toggle_assistant_context(self, checked):
+        if self.stack.currentIndex() != 1:
+            return
+        tab = self._assistant_tab()
+        drawer = getattr(tab, "context_drawer", None)
+        if drawer:
+            drawer.setVisible(checked)
+
+    def _clear_assistant_chat(self):
+        tab = self._assistant_tab()
+        if hasattr(tab, "_clear_chat"):
+            tab._clear_chat()
+        self._go_to_tab(1)
+
+    def _recheck_assistant_model(self):
+        tab = self._assistant_tab()
+        if hasattr(tab, "_recheck_model"):
+            tab._recheck_model()
+        self._go_to_tab(1)
 
     def _on_assistant_action_requested(self, kind, payload):
         if kind == "refresh_displays":
@@ -163,14 +329,12 @@ class MainWindow(QMainWindow):
                 tab.start_scan()
 
     def _jump_to_tool(self):
-        text = self.tool_search.text().strip().lower()
+        text = ""
         if not text:
             return
         for keyword, index in _TOOL_SEARCH.items():
             if keyword in text:
-                self.tabs.setCurrentIndex(index)
-                self._ensure_tab_loaded(index)
-                self.statusBar().showMessage(f"Opened {self.tabs.tabText(index)}")
+                self._go_to_tab(index)
                 return
         self.statusBar().showMessage("No matching tool found")
 

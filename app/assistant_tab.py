@@ -3,7 +3,7 @@ from datetime import datetime
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QToolButton, QMenu, QMessageBox,
+    QScrollArea, QFrame, QMessageBox,
 )
 
 from app.ai_engine import (
@@ -201,40 +201,9 @@ class AssistantTab(QWidget):
         self._current_snapshot = None
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 12, 14, 12)
-        outer.setSpacing(10)
-
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(4, 0, 4, 0)
-        section_label = QLabel("PC Fix Assistant")
-        section_label.setProperty("role", "eyebrow")
-        header_layout.addWidget(section_label)
-        header_layout.addStretch(1)
-
-        self.status_chip = QLabel("Checking model")
-        self.status_chip.setProperty("role", "status-chip")
-        header_layout.addWidget(self.status_chip)
-
-        self.context_btn = QToolButton()
-        self.context_btn.setText("PC Context")
-        self.context_btn.setCheckable(True)
-        self.context_btn.setProperty("role", "header-menu-btn")
-        self.context_btn.toggled.connect(self._toggle_context_drawer)
-        header_layout.addWidget(self.context_btn)
-
-        self.menu_btn = QToolButton()
-        self.menu_btn.setText("Menu")
-        self.menu_btn.setProperty("role", "header-menu-btn")
-        self.menu_btn.setPopupMode(QToolButton.InstantPopup)
-        header_menu = QMenu(self.menu_btn)
-        self.stop_action = header_menu.addAction("Stop")
-        self.stop_action.triggered.connect(self._stop_inference)
-        self.stop_action.setVisible(False)
-        header_menu.addAction("Clear", self._clear_chat)
-        header_menu.addAction("Recheck Model", self._recheck_model)
-        self.menu_btn.setMenu(header_menu)
-        header_layout.addWidget(self.menu_btn)
-        outer.addLayout(header_layout)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.stop_action = None
 
         body_layout = QHBoxLayout()
         body_layout.setSpacing(0)
@@ -247,6 +216,7 @@ class AssistantTab(QWidget):
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.setProperty("role", "chat-scroll")
         self.feed = QWidget()
         self.feed_layout = QVBoxLayout(self.feed)
@@ -278,8 +248,6 @@ class AssistantTab(QWidget):
         self.context_drawer.refresh_requested.connect(lambda: self._refresh_snapshot(False))
         body_layout.addWidget(self.context_drawer)
         outer.addLayout(body_layout, 1)
-
-        self.context_btn.setChecked(True)
 
         self._refresh_snapshot(False)
         if not model_exists():
@@ -317,7 +285,9 @@ class AssistantTab(QWidget):
         return panel
 
     def _set_status(self, text):
-        self.status_chip.setText(text)
+        window = self.window()
+        if hasattr(window, "global_status_chip"):
+            window.global_status_chip.setText(text)
 
     def _set_input_enabled(self, enabled):
         self.input_dock.set_input_enabled(enabled)
@@ -506,8 +476,9 @@ class AssistantTab(QWidget):
         self._typing_indicator = TypingIndicator()
         self.messages_layout.addWidget(self._typing_indicator)
         self._set_input_enabled(False)
-        self.stop_action.setVisible(True)
-        self.stop_action.setEnabled(True)
+        if self.stop_action:
+            self.stop_action.setVisible(True)
+            self.stop_action.setEnabled(True)
         self._set_status("Thinking")
         self.context_drawer.set_loading()
 
@@ -631,8 +602,9 @@ class AssistantTab(QWidget):
 
     def _finish_inference_ui(self, status):
         self._pending_user_text = ""
-        self.stop_action.setEnabled(False)
-        self.stop_action.setVisible(False)
+        if self.stop_action:
+            self.stop_action.setEnabled(False)
+            self.stop_action.setVisible(False)
         self._set_status(status)
         self._set_input_enabled(self._model_ready)
         if self._model_ready:

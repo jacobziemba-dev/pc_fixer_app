@@ -8,6 +8,50 @@ QWidget {
 QMainWindow {
     background-color: #0e1117;
 }
+QFrame[role="app-shell"] {
+    background-color: #0e1117;
+    border: 1px solid #1f2630;
+}
+QFrame[role="top-bar"] {
+    background-color: #0d1118;
+    border-bottom: 1px solid #232b36;
+}
+QFrame[role="side-bar"] {
+    background-color: #0d1118;
+    border-right: 1px solid #232b36;
+    min-width: 190px;
+    max-width: 210px;
+}
+QFrame[role="top-nav"] {
+    background-color: #0d1118;
+    border: 1px solid #303846;
+    border-radius: 10px;
+}
+QFrame[role="protected-card"] {
+    background-color: #10151d;
+    border: 1px solid #151b24;
+    border-radius: 8px;
+}
+QLabel[role="app-logo"] {
+    color: #58a0ff;
+    border: 2px solid #3b82f6;
+    border-radius: 4px;
+    min-width: 34px;
+    min-height: 28px;
+    max-width: 34px;
+    max-height: 28px;
+    font-weight: 900;
+}
+QLabel[role="app-title"] {
+    color: #ffffff;
+    font-size: 25px;
+    font-weight: 800;
+}
+QLabel[role="protected-title"] {
+    color: #8ee66b;
+    font-size: 14px;
+    font-weight: 700;
+}
 QTabWidget::pane {
     border: 1px solid #33343d;
     border-radius: 6px;
@@ -328,6 +372,50 @@ QPushButton[variant="secondary"]:hover {
     background-color: #151c28;
     border-color: #3d4858;
 }
+QPushButton[variant="top-nav"] {
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+    color: #d7dae3;
+    min-width: 104px;
+    padding: 9px 18px;
+    font-size: 14px;
+}
+QPushButton[variant="top-nav"]:checked {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #1d3a62,
+        stop:1 #172b4a
+    );
+    color: #ffffff;
+}
+QPushButton[variant="top-nav"]:hover {
+    background-color: #141b25;
+}
+QPushButton[variant="side-nav"] {
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+    color: #c8ccd6;
+    text-align: left;
+    padding: 13px 16px;
+    min-height: 24px;
+    font-size: 15px;
+    font-weight: 500;
+}
+QPushButton[variant="side-nav"]:checked {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #183254,
+        stop:1 #121a25
+    );
+    border-left: 3px solid #3b82f6;
+    color: #9ec8ff;
+}
+QPushButton[variant="side-nav"]:hover {
+    background-color: #141b25;
+    color: #ffffff;
+}
 QPushButton[variant="chip"] {
     background-color: #252a36;
     border: 1px solid #3b4358;
@@ -341,9 +429,9 @@ QPushButton[variant="welcome-card"] {
     background-color: #10151d;
     border: 1px solid #303846;
     border-radius: 8px;
-    padding: 18px 20px;
-    min-height: 92px;
-    min-width: 146px;
+    padding: 20px 22px;
+    min-height: 112px;
+    min-width: 165px;
     text-align: left;
     font-size: 14px;
     font-weight: 600;

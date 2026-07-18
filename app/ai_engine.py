@@ -17,9 +17,11 @@ DEFAULT_SYSTEM_PROMPT = (
     "Use the system snapshot provided with each question. "
     "Use recent conversation only for continuity, not as hardware facts. "
     "Answer in 2-4 short sentences with practical advice. "
-    "Do not invent hardware details that are not in the snapshot. "
-    "When an app action would help, explain what you found, recommend one or two next actions, "
-    "and include fenced JSON skill requests only for known skills. "
+    "Do not invent hardware details, process names, adapters, or devices that are not in the snapshot. "
+    "Prefer one skill request unless the user clearly asked for a multi-step plan. "
+    "When an app action would help, explain what you found, recommend the next action, "
+    "and include fenced JSON skill requests only for known skills listed in the catalog. "
+    "If needed snapshot data is missing, say you need a refresh first and request the matching refresh skill. "
     "Never claim an action already ran before the app confirms it. "
     "The app validates every request and requires confirmation for PC-changing actions."
 )
@@ -43,6 +45,9 @@ SNAPSHOT_UNAVAILABLE = "(system snapshot unavailable)"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = PROJECT_ROOT / "models"
 MAX_HISTORY_TURNS = 8
+MAX_HISTORY_CHARS = 1200
+DEFAULT_N_CTX = 4096
+DEFAULT_MAX_TOKENS = 320
 
 
 class AIEngineError(Exception):
@@ -67,39 +72,40 @@ def missing_model_message(path=None):
     )
 
 
-def format_chat_prompt(system_prompt, user_prompt):
-    """Format a prompt using the Llama 3.2 Instruct chat template."""
-    return (
-        "<|start_header_id|>system<|end_header_id|>\n\n"
-        f"{system_prompt}<|eot_id|>"
-        "<|start_header_id|>user<|end_header_id|>\n\n"
-        f"{user_prompt}<|eot_id|>"
-        "<|start_header_id|>assistant<|end_header_id|>\n\n"
-    )
+def _turn_texts(turn):
+    if isinstance(turn, AssistantTurn):
+        return turn.user.strip(), turn.assistant.strip()
+    return str(turn.get("user", "")).strip(), str(turn.get("assistant", "")).strip()
 
 
-def trim_chat_history(history, max_turns=MAX_HISTORY_TURNS):
-    """Return the newest complete chat turns, preserving their original order."""
+def trim_chat_history(history, max_turns=MAX_HISTORY_TURNS, max_chars=MAX_HISTORY_CHARS):
+    """Return newest turns that fit both turn and character budgets."""
     if not history:
         return []
-    return list(history)[-max_turns:]
+    selected = []
+    used_chars = 0
+    for turn in reversed(list(history)[-max_turns:]):
+        user, assistant = _turn_texts(turn)
+        if not user and not assistant:
+            continue
+        cost = len(user) + len(assistant)
+        if selected and used_chars + cost > max_chars:
+            break
+        selected.append(turn)
+        used_chars += cost
+    selected.reverse()
+    return selected
 
 
-def format_chat_history(history, max_turns=MAX_HISTORY_TURNS):
-    turns = trim_chat_history(history, max_turns)
+def format_chat_history(history, max_turns=MAX_HISTORY_TURNS, max_chars=MAX_HISTORY_CHARS):
+    """Legacy plain-text history (kept for tests and debugging)."""
+    turns = trim_chat_history(history, max_turns=max_turns, max_chars=max_chars)
     if not turns:
         return ""
 
     lines = []
     for turn in turns:
-        if isinstance(turn, AssistantTurn):
-            user = turn.user.strip()
-            assistant = turn.assistant.strip()
-        else:
-            user = str(turn.get("user", "")).strip()
-            assistant = str(turn.get("assistant", "")).strip()
-        if not user and not assistant:
-            continue
+        user, assistant = _turn_texts(turn)
         if user:
             lines.append(f"User: {user}")
         if assistant:
@@ -107,17 +113,45 @@ def format_chat_history(history, max_turns=MAX_HISTORY_TURNS):
     return "\n".join(lines)
 
 
+def format_chat_prompt(system_prompt, user_prompt, history=None):
+    """Format a prompt using the Llama 3.2 Instruct chat template with native history turns."""
+    parts = [
+        "<|start_header_id|>system<|end_header_id|>\n\n",
+        f"{system_prompt}<|eot_id|>",
+    ]
+    for turn in trim_chat_history(history):
+        user, assistant = _turn_texts(turn)
+        if user:
+            parts.append(
+                "<|start_header_id|>user<|end_header_id|>\n\n"
+                f"{user}<|eot_id|>"
+            )
+        if assistant:
+            parts.append(
+                "<|start_header_id|>assistant<|end_header_id|>\n\n"
+                f"{assistant}<|eot_id|>"
+            )
+    parts.append(
+        "<|start_header_id|>user<|end_header_id|>\n\n"
+        f"{user_prompt}<|eot_id|>"
+        "<|start_header_id|>assistant<|end_header_id|>\n\n"
+    )
+    return "".join(parts)
+
+
 def compose_user_prompt(user_text, context=None, history=None, skill_catalog=None):
+    """Compose the current-turn user message (snapshot + catalog + question).
+
+    History is passed separately to format_chat_prompt as native chat turns.
+    The optional history argument is ignored here for backward compatibility.
+    """
+    del history  # history is applied in format_chat_prompt
     sections = []
     if context:
         sections.append(f"System snapshot:\n{context}")
 
     if skill_catalog:
         sections.append(skill_catalog)
-
-    history_text = format_chat_history(history)
-    if history_text:
-        sections.append(f"Recent conversation:\n{history_text}")
 
     if not sections:
         return user_text
@@ -162,15 +196,15 @@ def build_system_context(include_cleanup=False):
     return render_snapshot_context(snapshot)
 
 
-def build_skill_catalog():
-    return render_skill_catalog()
+def build_skill_catalog(user_text=None):
+    return render_skill_catalog(user_text=user_text)
 
 
 class EmbeddedAI:
     def __init__(
         self,
         model_path=None,
-        n_ctx=2048,
+        n_ctx=DEFAULT_N_CTX,
         n_threads=None,
     ):
         self.model_path = Path(model_path or resolve_model_path())
@@ -211,12 +245,13 @@ class EmbeddedAI:
         self,
         system_prompt,
         user_prompt,
-        max_tokens=256,
+        max_tokens=DEFAULT_MAX_TOKENS,
         temperature=0.3,
         stop=None,
+        history=None,
     ):
         self._ensure_loaded()
-        prompt = format_chat_prompt(system_prompt, user_prompt)
+        prompt = format_chat_prompt(system_prompt, user_prompt, history=history)
         output = self._llm(
             prompt,
             max_tokens=max_tokens,
@@ -229,12 +264,13 @@ class EmbeddedAI:
         self,
         system_prompt,
         user_prompt,
-        max_tokens=256,
+        max_tokens=DEFAULT_MAX_TOKENS,
         temperature=0.3,
         stop=None,
+        history=None,
     ):
         self._ensure_loaded()
-        prompt = format_chat_prompt(system_prompt, user_prompt)
+        prompt = format_chat_prompt(system_prompt, user_prompt, history=history)
         stream = self._llm(
             prompt,
             max_tokens=max_tokens,

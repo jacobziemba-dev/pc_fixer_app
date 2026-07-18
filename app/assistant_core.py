@@ -746,6 +746,120 @@ TAB_ACTION_KINDS = {
     if tool.handler == "tab"
 }
 
+# Always included in the prompt catalog (keeps common triage skills available).
+CORE_SKILL_NAMES = frozenset({
+    "diagnose_pc_health",
+    "inspect_top_processes",
+    "scan_cleanup",
+    "clean_scanned_cleanup",
+    "export_pc_report",
+    "check_pending_reboot",
+    "open_windows_settings",
+    "open_known_folder",
+})
+
+SKILL_DOMAIN_KEYWORDS = {
+    "network": (
+        "network", "internet", "wifi", "wi-fi", "ethernet", "dns", "adapter",
+        "ip", "winsock", "ping", "gateway", "offline", "connection",
+    ),
+    "display": ("display", "monitor", "refresh rate", "screen", "hz", "resolution"),
+    "audio": ("audio", "sound", "speaker", "volume", "mute", "route", "headphones"),
+    "layouts": ("layout", "layouts", "window", "windows", "arrange", "desktop layout"),
+    "startup": ("startup", "boot", "launch on start", "startup apps", "startup programs"),
+    "storage": (
+        "storage", "disk", "drive", "large file", "large files", "duplicate",
+        "folder size", "downloads", "desktop files", "space",
+    ),
+    "cleanup": ("clean", "cleanup", "junk", "temp", "cache", "recycle", "free space"),
+    "power": ("power", "battery", "power plan", "performance plan", "power saver"),
+    "security": ("security", "defender", "firewall", "update", "updates", "event log", "errors"),
+    "hardware": ("hardware", "gpu", "cpu", "bios", "motherboard", "specs", "uptime", "memory pressure"),
+    "process": ("process", "processes", "task manager", "end process", "kill", "cpu hog"),
+    "system": (
+        "settings", "task manager", "resource monitor", "device manager",
+        "explorer", "restore point", "open folder",
+    ),
+}
+
+SKILL_DOMAINS = {
+    "diagnose_pc_health": ("hardware", "process"),
+    "inspect_top_processes": ("process",),
+    "refresh_network": ("network",),
+    "refresh_hardware": ("hardware",),
+    "refresh_startup_programs": ("startup",),
+    "scan_cleanup": ("cleanup", "storage"),
+    "clean_scanned_cleanup": ("cleanup",),
+    "refresh_displays": ("display",),
+    "set_display_refresh_rate": ("display",),
+    "refresh_audio": ("audio",),
+    "set_app_volume": ("audio",),
+    "mute_app_audio": ("audio",),
+    "route_app_audio": ("audio",),
+    "refresh_layouts": ("layouts",),
+    "load_saved_layout": ("layouts",),
+    "check_windows_updates": ("security",),
+    "check_disk_health": ("storage", "hardware"),
+    "scan_event_log_errors": ("security",),
+    "check_network_health": ("network",),
+    "flush_dns_cache": ("network",),
+    "restart_network_adapter": ("network",),
+    "check_power_plan": ("power",),
+    "set_power_plan": ("power",),
+    "review_startup_impact": ("startup",),
+    "check_windows_security": ("security",),
+    "scan_large_files": ("storage",),
+    "scan_folder_sizes": ("storage",),
+    "scan_duplicate_files": ("storage",),
+    "end_process": ("process",),
+    "set_startup_item_enabled": ("startup",),
+    "renew_ip_address": ("network",),
+    "reset_winsock": ("network",),
+    "check_pending_reboot": ("security", "system"),
+    "check_battery_report": ("power",),
+    "restart_explorer": ("system",),
+    "open_windows_settings": ("system",),
+    "open_known_folder": ("system", "cleanup"),
+    "create_restore_point": ("system", "security"),
+    "export_pc_report": ("system",),
+}
+
+FULL_CATALOG_PROMPTS = (
+    "what can you do",
+    "what skills",
+    "list skills",
+    "available skills",
+    "help me with everything",
+    "show all skills",
+    "what are you able",
+)
+
+
+def detect_skill_domains(user_text):
+    lowered = (user_text or "").lower()
+    if not lowered.strip():
+        return set()
+    if any(phrase in lowered for phrase in FULL_CATALOG_PROMPTS):
+        return {"*"}
+    domains = set()
+    for domain, keywords in SKILL_DOMAIN_KEYWORDS.items():
+        if any(keyword in lowered for keyword in keywords):
+            domains.add(domain)
+    return domains
+
+
+def select_skill_names_for_prompt(user_text=None):
+    domains = detect_skill_domains(user_text)
+    if "*" in domains:
+        return [name for name, skill in ASSISTANT_SKILLS.items() if skill.enabled]
+    selected = set(CORE_SKILL_NAMES)
+    for name, skill_domains in SKILL_DOMAINS.items():
+        if name not in ASSISTANT_SKILLS:
+            continue
+        if domains.intersection(skill_domains):
+            selected.add(name)
+    return [name for name in ASSISTANT_SKILLS if name in selected and ASSISTANT_SKILLS[name].enabled]
+
 
 def _tool(kind):
     return ASSISTANT_TOOLS[kind]
@@ -774,17 +888,20 @@ def get_assistant_skills():
     return dict(ASSISTANT_SKILLS)
 
 
-def render_skill_catalog():
+def render_skill_catalog(user_text=None, skill_names=None):
+    if skill_names is None:
+        skill_names = select_skill_names_for_prompt(user_text)
     lines = [
         "Available assistant skills:",
-        "When useful, include one or more fenced JSON skill requests exactly like:",
+        "When useful, include one fenced JSON skill request exactly like:",
         '```json\n{"type":"skill_request","skill":"scan_cleanup","arguments":{}}\n```',
         "Never invent skills. Never request shell commands, arbitrary code, registry edits, or arbitrary file deletion.",
     ]
-    for skill in ASSISTANT_SKILLS.values():
-        if not skill.enabled:
+    for name in skill_names:
+        skill = ASSISTANT_SKILLS.get(name)
+        if not skill or not skill.enabled:
             continue
-        args = ", ".join(f"{name}: {kind}" for name, kind in skill.input_schema.items()) or "none"
+        args = ", ".join(f"{arg_name}: {kind}" for arg_name, kind in skill.input_schema.items()) or "none"
         confirmation = "confirmation required" if skill.requires_confirmation else "read-only action card"
         lines.append(
             f"- {skill.name}: {skill.description} Args: {args}. "
@@ -1442,8 +1559,18 @@ def validate_skill_request(request, snapshot=None):
     if not skill.enabled:
         return SkillValidationResult(False, f"Skill is disabled: {name}.")
     arguments = request.get("arguments", {})
+    if arguments is None:
+        arguments = {}
     if not isinstance(arguments, dict):
         return SkillValidationResult(False, f"Arguments for {name} must be an object.")
+
+    allowed_keys = set(skill.input_schema)
+    unknown = sorted(set(arguments) - allowed_keys)
+    if unknown:
+        return SkillValidationResult(
+            False,
+            f"Unknown argument(s) for {name}: {', '.join(unknown)}.",
+        )
 
     for field_name, expected in skill.input_schema.items():
         optional = str(expected).endswith("?")
@@ -1472,7 +1599,7 @@ def _value_matches_schema(value, expected):
         return isinstance(value, bool)
     if expected == "list[str]":
         return isinstance(value, list) and all(isinstance(item, str) for item in value)
-    return True
+    return False
 
 
 def skill_request_to_action(request, snapshot=None):

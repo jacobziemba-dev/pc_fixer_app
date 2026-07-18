@@ -1,5 +1,5 @@
 from PySide6.QtCore import QThread, Signal
-from PySide6.QtWidgets import QLabel, QTableWidget, QTableWidgetItem
+from PySide6.QtWidgets import QLabel
 
 from app import tool_history
 from app.job_queue import get_job_queue
@@ -79,13 +79,3 @@ def set_status_label(label: QLabel, text, success=None):
         label.setProperty("state", level)
         label.style().unpolish(label)
         label.style().polish(label)
-
-
-def populate_history_table(table: QTableWidget):
-    items = tool_history.entries()
-    table.setRowCount(len(items))
-    for row, item in enumerate(items):
-        table.setItem(row, 0, QTableWidgetItem(item.timestamp.strftime("%H:%M:%S")))
-        table.setItem(row, 1, QTableWidgetItem(item.title))
-        table.setItem(row, 2, QTableWidgetItem("OK" if item.success else "Review"))
-        table.setItem(row, 3, QTableWidgetItem(item.summary))

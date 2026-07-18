@@ -1,11 +1,21 @@
+from dataclasses import dataclass
+
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QCheckBox,
-    QSlider, QAbstractItemView, QProgressBar,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QComboBox, QCheckBox, QSlider, QProgressBar, QScrollArea, QFrame,
 )
 
 from app import audio_control as audio
+from app.ui_kit import build_context_row, clear_layout, empty_row, rows_card, section_panel
+
+
+@dataclass
+class _SessionControls:
+    peak_bar: QProgressBar
+    volume_slider: QSlider
+    device_combo: QComboBox
+    mute_check: QCheckBox
 
 
 class AudioTab(QWidget):
@@ -15,12 +25,6 @@ class AudioTab(QWidget):
     thread (STA). Background QThreads crash under this stack, so load,
     routing, volume, and peak polling all happen on the main thread.
     """
-
-    COL_APP = 0
-    COL_PEAK = 1
-    COL_VOLUME = 2
-    COL_DEVICE = 3
-    COL_MUTE = 4
 
     def __init__(self):
         super().__init__()
@@ -56,23 +60,14 @@ class AudioTab(QWidget):
         controls.addStretch(1)
         outer.addLayout(controls)
 
-        table_group = QGroupBox("Active App Sessions")
-        table_layout = QVBoxLayout(table_group)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["App", "Peak", "Volume", "Output device", "Mute"])
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(self.COL_APP, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(self.COL_PEAK, QHeaderView.Fixed)
-        self.table.horizontalHeader().setSectionResizeMode(self.COL_VOLUME, QHeaderView.Fixed)
-        self.table.horizontalHeader().setSectionResizeMode(self.COL_DEVICE, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(self.COL_MUTE, QHeaderView.ResizeToContents)
-        self.table.setColumnWidth(self.COL_PEAK, 120)
-        self.table.setColumnWidth(self.COL_VOLUME, 140)
-        table_layout.addWidget(self.table)
-        outer.addWidget(table_group, 1)
+        sessions_panel, sessions_body = section_panel("ACTIVE APP SESSIONS")
+        sessions_scroll = QScrollArea()
+        sessions_scroll.setWidgetResizable(True)
+        sessions_scroll.setFrameShape(QFrame.NoFrame)
+        sessions_card, self.sessions_rows = rows_card()
+        sessions_scroll.setWidget(sessions_card)
+        sessions_body.addWidget(sessions_scroll, 1)
+        outer.addWidget(sessions_panel, 1)
 
         self.status_label = QLabel("Loading audio devices and sessions...")
         self.status_label.setProperty("role", "caption")
@@ -81,7 +76,7 @@ class AudioTab(QWidget):
 
         self._devices: list[audio.OutputDevice] = []
         self._sessions: list[audio.OutputSession] = []
-        self._row_by_pid: dict[int, int] = {}
+        self._row_by_pid: dict[int, _SessionControls] = {}
         self._user_volumes: dict[int, float] = {}
         self._normalizer = audio.PeakNormalizer()
         self._updating_ui = False
@@ -133,45 +128,41 @@ class AudioTab(QWidget):
                 f"{len(sessions)} app session(s), {len(devices)} playback device(s)."
             )
 
-        self._rebuild_table()
+        self._rebuild_rows()
         active_pids = {session.pid for session in sessions}
         self._normalizer.prune(active_pids)
         for pid in list(self._user_volumes):
             if pid not in active_pids:
                 self._user_volumes.pop(pid, None)
 
-    def _rebuild_table(self):
+    def _rebuild_rows(self):
         self._updating_ui = True
-        self.table.setRowCount(0)
+        clear_layout(self.sessions_rows)
         self._row_by_pid.clear()
 
+        if not self._sessions:
+            self.sessions_rows.addWidget(empty_row("No active app audio sessions."))
+            self._updating_ui = False
+            return
+
         for session in self._sessions:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            self._row_by_pid[session.pid] = row
-
-            app_item = QTableWidgetItem(session.display_name)
-            app_item.setData(Qt.UserRole, session.pid)
-            app_item.setToolTip(session.process_name)
-            self.table.setItem(row, self.COL_APP, app_item)
-
             peak_bar = QProgressBar()
             peak_bar.setRange(0, 100)
             peak_bar.setValue(0)
             peak_bar.setTextVisible(False)
-            peak_bar.setFixedHeight(12)
-            self.table.setCellWidget(row, self.COL_PEAK, peak_bar)
+            peak_bar.setFixedSize(70, 10)
 
             volume_slider = QSlider(Qt.Horizontal)
             volume_slider.setRange(0, 100)
             volume_slider.setValue(int(round(session.volume * 100)))
+            volume_slider.setFixedWidth(110)
             volume_slider.setToolTip(f"{int(round(session.volume * 100))}%")
             volume_slider.valueChanged.connect(
                 lambda value, pid=session.pid: self._on_volume_changed(pid, value)
             )
-            self.table.setCellWidget(row, self.COL_VOLUME, volume_slider)
 
             device_combo = QComboBox()
+            device_combo.setFixedWidth(170)
             device_combo.addItem("System default", "")
             for device in self._devices:
                 label = device.name
@@ -188,20 +179,25 @@ class AudioTab(QWidget):
                 lambda _index, pid=session.pid, name=session.process_name, combo=device_combo:
                 self._on_device_changed(pid, name, combo)
             )
-            self.table.setCellWidget(row, self.COL_DEVICE, device_combo)
 
-            mute_check = QCheckBox()
+            mute_check = QCheckBox("Mute")
             mute_check.setChecked(session.muted)
             mute_check.toggled.connect(
                 lambda checked, pid=session.pid: self._on_mute_toggled(pid, checked)
             )
-            mute_wrap = QWidget()
-            mute_layout = QHBoxLayout(mute_wrap)
-            mute_layout.setContentsMargins(8, 0, 8, 0)
-            mute_layout.addStretch(1)
-            mute_layout.addWidget(mute_check)
-            mute_layout.addStretch(1)
-            self.table.setCellWidget(row, self.COL_MUTE, mute_wrap)
+
+            controls_widget = QWidget()
+            controls_layout = QHBoxLayout(controls_widget)
+            controls_layout.setContentsMargins(0, 0, 0, 0)
+            controls_layout.setSpacing(10)
+            controls_layout.addWidget(peak_bar)
+            controls_layout.addWidget(volume_slider)
+            controls_layout.addWidget(device_combo)
+            controls_layout.addWidget(mute_check)
+
+            row = build_context_row(session.display_name, session.process_name, trailing=controls_widget)
+            self.sessions_rows.addWidget(row)
+            self._row_by_pid[session.pid] = _SessionControls(peak_bar, volume_slider, device_combo, mute_check)
 
             self._user_volumes.setdefault(session.pid, session.volume)
             self._normalizer.set_user_volume(session.pid, self._user_volumes[session.pid])
@@ -282,12 +278,10 @@ class AudioTab(QWidget):
             self._set_volume_slider(pid, new_volume, from_normalizer=True)
 
     def _set_peak_bar(self, pid, peak):
-        row = self._row_by_pid.get(pid)
-        if row is None:
+        controls = self._row_by_pid.get(pid)
+        if controls is None:
             return
-        bar = self.table.cellWidget(row, self.COL_PEAK)
-        if bar is None:
-            return
+        bar = controls.peak_bar
         value = int(round(max(0.0, min(1.0, float(peak))) * 100))
         bar.setValue(value)
         if value >= 90:
@@ -300,10 +294,8 @@ class AudioTab(QWidget):
         bar.style().polish(bar)
 
     def _volume_slider_for(self, pid):
-        row = self._row_by_pid.get(pid)
-        if row is None:
-            return None
-        return self.table.cellWidget(row, self.COL_VOLUME)
+        controls = self._row_by_pid.get(pid)
+        return controls.volume_slider if controls else None
 
     def _set_volume_slider(self, pid, level, from_normalizer=False):
         slider = self._volume_slider_for(pid)

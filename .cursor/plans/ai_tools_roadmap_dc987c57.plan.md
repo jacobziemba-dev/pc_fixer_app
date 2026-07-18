@@ -1,6 +1,6 @@
 ---
 name: AI Assistant Roadmap
-overview: A phased roadmap focused on the AI Chat assistant — better prompts/context, stricter skill handling, Chat UX, and assistant-facing skills — without a broad toolbox/tab overhaul.
+overview: A phased roadmap focused on the AI Chat assistant — better prompts/context, stricter skill handling, Chat UX, and a large expansion of assistant skills (~20 new fixed/validated skills) — without a broad toolbox/tab overhaul.
 todos:
   - id: phase-1-context
     content: "Phase 1: Raise n_ctx, intent-filter skill catalog, native history budget, tighter system prompt"
@@ -86,25 +86,63 @@ Primary files: [`app/assistant_tab.py`](app/assistant_tab.py), [`app/chat_widget
 
 ---
 
-## Phase 4 — Assistant-first new skills
+## Phase 4 — Expand the assistant skill catalog
 
-**Goal:** Expand what Chat can request through named, validated, confirm-gated skills. Update [`skills_list.md`](skills_list.md) in the same change for every skill touch.
+**Goal:** Materially grow what Chat can request through named, validated, confirm-gated skills. Every skill gets `ASSISTANT_SKILLS` / `ASSISTANT_TOOLS`, validate/execute wiring, tests, and a [`skills_list.md`](skills_list.md) row in the same change.
 
-Primary files: [`app/assistant_core.py`](app/assistant_core.py), [`app/toolbox.py`](app/toolbox.py) (backends only as needed for skills), [`skills_list.md`](skills_list.md)
+Primary files: [`app/assistant_core.py`](app/assistant_core.py), [`app/toolbox.py`](app/toolbox.py) (fixed backends only), [`app/system_info.py`](app/system_info.py) when reuse is cleaner, [`skills_list.md`](skills_list.md)
 
-Ship these first (highest Chat value, still conservative):
+Ship in three waves so Phase 1 catalog filtering can absorb them.
 
-- `empty_recycle_bin` — common cleanup ask; allowlisted only; **confirm**
-- Category-scoped safe clean (reuse existing cleanup categories / scanned candidates) — **confirm**
-- `list_network_adapters` — feeds better `restart_network_adapter` resolution — read-only
-- `check_dns_resolve` with a fixed host allowlist (e.g. `one.one.one.one`) — read-only
-- `open_task_manager` and a small expansion of allowlisted `open_windows_settings` pages — no confirm, allowlisted only
+### Wave A — Cleanup & storage (Chat’s most common asks)
 
-New skills get `ASSISTANT_SKILLS` / `ASSISTANT_TOOLS` entries, validation/execution paths, tests, and `skills_list.md` rows. Tab buttons for the same actions are optional later and not required in this phase.
+| Skill | Confirm | Notes |
+| --- | --- | --- |
+| `empty_recycle_bin` | Yes | Allowlisted Recycle Bin only |
+| `clean_temp_files` | Yes | Uses existing temp cleanup category / scanned candidates only |
+| `clean_browser_cache` | Yes | Existing browser-cache cleanup categories only |
+| `clean_thumbnail_cache` | Yes | Existing thumbnail category only |
+| `get_recycle_bin_size` | No | Read-only size report (reuse `_recycle_bin_size`) |
+| `scan_downloads_large_files` | No | Convenience wrapper: large-file scan rooted at Downloads |
+| `scan_desktop_large_files` | No | Same for Desktop |
 
-**Still out of scope:** arbitrary process kill by path, registry editors, unrestricted deletion, remote/cloud LLM, or “run this PowerShell” skills.
+### Wave B — Network diagnostics (better triage before mutate)
 
-**Done when:** Each new skill has catalog entry + validate/execute path + tests + `skills_list.md` documentation.
+| Skill | Confirm | Notes |
+| --- | --- | --- |
+| `list_network_adapters` | No | Names/status for better `restart_network_adapter` targeting |
+| `check_dns_resolve` | No | Fixed host allowlist only (`one.one.one.one`, `dns.google`, etc.) |
+| `ping_host` | No | Fixed host allowlist + count cap; no arbitrary hosts |
+| `check_default_gateway` | No | Read gateway/route summary for “no internet” triage |
+| `show_wifi_status` | No | Connected SSID / signal if available; no password access |
+
+### Wave C — System helpers & allowlisted openers
+
+| Skill | Confirm | Notes |
+| --- | --- | --- |
+| `open_task_manager` | No | Fixed launcher only |
+| `open_resource_monitor` | No | Fixed launcher only |
+| `open_device_manager` | No | Fixed launcher only |
+| `expand open_windows_settings` | No | Add allowlisted pages: `storage`, `power`, `privacy`, `troubleshoot`, `about` |
+| `expand open_known_folder` | No | Add allowlisted: `desktop`, `documents`, `pictures` |
+| `check_system_uptime` | No | Boot time / uptime for slow-PC advice |
+| `check_memory_pressure` | No | Compact RAM + commit/pagefile signals beyond snapshot % |
+| `list_installed_gpus` | No | From hardware summary; helps display/performance advice |
+| `check_smart_status` | No | Thin wrapper/clarification around disk health if not already clear enough in Chat |
+| `capture_layout_snapshot` | Yes | Save current window layout (uses existing layouts backend) |
+| `set_default_audio_device` | Yes | Resolve playback device from snapshot; confirm before switch |
+
+### Implementation rules for new skills
+
+- Prefer wrapping existing `toolbox` / `system_info` / `audio_control` / `window_layouts` paths over new OS surfaces.
+- Mutating skills always `requires_confirmation=True`.
+- Hosts, folders, settings pages, and cleanup categories stay allowlisted in Python — never free-form from the model.
+- Intent-filtered catalog (Phase 1) must map these into domains (`cleanup`, `network`, `system`, `audio`, `layouts`) so the 3B context doesn’t explode.
+- Tab UI buttons for the same actions are optional and not required in this phase.
+
+**Still out of scope:** arbitrary process kill by path, registry editors, unrestricted deletion, remote/cloud LLM, Wi‑Fi password reading, or “run this PowerShell/Python” skills.
+
+**Done when:** Waves A–C are in the catalog with validate/execute paths, focused tests, and updated `skills_list.md`.
 
 ---
 
@@ -130,10 +168,10 @@ Primary files: [`app/assistant_tab.py`](app/assistant_tab.py), [`app/job_queue.p
 | 1 | Context + catalog + history | ~2–3 days |
 | 2 | Validation + resolution | ~3–4 days |
 | 3 | Chat UX | ~2–3 days |
-| 4 | New assistant skills | ~3–4 days |
+| 4 | Expanded skill waves A–C (~20 skills) | ~5–7 days |
 | 5 | Assistant JobQueue | ~1–2 days |
 
-Start with Phase 1+2 before Phase 4 — new skills make a weak catalog/validator worse.
+Start with Phase 1+2 before Phase 4 — new skills make a weak catalog/validator worse. Prefer shipping Wave A, then B, then C so Chat gains cleanup/network value first.
 
 ---
 

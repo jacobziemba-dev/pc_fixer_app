@@ -12,9 +12,22 @@ def clear_layout(layout):
             clear_layout(item.layout())
 
 
-def build_context_row(primary_text, secondary_text="", meta_text="", trailing=None):
-    row = QFrame()
+class _ClickableFrame(QFrame):
+    def __init__(self, on_click):
+        super().__init__()
+        self._on_click = on_click
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._on_click:
+            self._on_click()
+        super().mousePressEvent(event)
+
+
+def build_context_row(primary_text, secondary_text="", meta_text="", trailing=None, on_click=None):
+    row = _ClickableFrame(on_click) if on_click is not None else QFrame()
     row.setProperty("role", "context-row")
+    if on_click is not None:
+        row.setCursor(Qt.PointingHandCursor)
     row_layout = QHBoxLayout(row)
     row_layout.setContentsMargins(4, 10, 4, 10)
     row_layout.setSpacing(10)

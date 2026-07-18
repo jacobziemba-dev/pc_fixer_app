@@ -133,11 +133,14 @@ class InferenceWorker(QThread):
             prompt = compose_user_prompt(
                 self._user_prompt,
                 context,
-                self._history,
-                skill_catalog=build_skill_catalog(),
+                skill_catalog=build_skill_catalog(user_text=self._display_text),
             )
             assistant_text = ""
-            for token in self._engine.stream_query(self._system_prompt, prompt):
+            for token in self._engine.stream_query(
+                self._system_prompt,
+                prompt,
+                history=self._history,
+            ):
                 if self._stop_requested:
                     self.cancelled.emit()
                     return
@@ -146,8 +149,11 @@ class InferenceWorker(QThread):
             cleaned_answer = strip_skill_requests(assistant_text)
             self.assistant_text_ready.emit(cleaned_answer)
             parsed_actions, parse_messages = skill_requests_to_actions(assistant_text, snapshot)
-            fallback_actions = propose_actions(self._display_text, snapshot)
-            actions = merge_action_lists(parsed_actions, fallback_actions)
+            # Only use keyword fallback when the model emitted no valid skills.
+            if parsed_actions:
+                actions = parsed_actions
+            else:
+                actions = propose_actions(self._display_text, snapshot)
             if parse_messages:
                 self.skill_messages_ready.emit(parse_messages)
             self.actions_ready.emit(actions)

@@ -260,6 +260,58 @@ def match_device_id(devices: list[OutputDevice], device_id: str) -> str:
     return ""
 
 
+def set_default_output_device(device_id: str) -> tuple[bool, str]:
+    """Set the default Windows playback device via PolicyConfig COM."""
+    device_id = str(device_id or "").strip()
+    if not device_id:
+        return False, "No audio device was selected."
+    devices = list_output_devices()
+    if not match_device_id(devices, device_id):
+        return False, "That playback device was not found."
+    try:
+        import comtypes
+        from comtypes import CLSCTX_ALL, COMMETHOD, GUID, HRESULT, IUnknown
+        from ctypes import POINTER, c_int
+    except Exception as exc:
+        return False, f"Audio COM support unavailable: {exc}"
+
+    class IPolicyConfig(IUnknown):
+        _iid_ = GUID("{f8679f50-850a-41cf-9c72-430f290290c8}")
+        _methods_ = [
+            COMMETHOD([], HRESULT, "Unused1"),
+            COMMETHOD([], HRESULT, "Unused2"),
+            COMMETHOD([], HRESULT, "Unused3"),
+            COMMETHOD([], HRESULT, "Unused4"),
+            COMMETHOD([], HRESULT, "Unused5"),
+            COMMETHOD([], HRESULT, "Unused6"),
+            COMMETHOD([], HRESULT, "Unused7"),
+            COMMETHOD([], HRESULT, "Unused8"),
+            COMMETHOD([], HRESULT, "Unused9"),
+            COMMETHOD([], HRESULT, "Unused10"),
+            COMMETHOD(
+                [],
+                HRESULT,
+                "SetDefaultEndpoint",
+                (["in"], comtypes.BSTR, "deviceId"),
+                (["in"], c_int, "role"),
+            ),
+        ]
+
+    CLSID_PolicyConfig = GUID("{870af99c-171d-4f9e-af0d-e63df40c2bc9}")
+    try:
+        comtypes.CoInitialize()
+    except Exception:
+        pass
+    try:
+        policy = comtypes.CoCreateInstance(CLSID_PolicyConfig, IPolicyConfig, CLSCTX_ALL)
+        # eConsole=0, eMultimedia=1, eCommunications=2
+        for role in (0, 1, 2):
+            policy.SetDefaultEndpoint(device_id, role)
+        return True, "Default playback device updated."
+    except Exception as exc:
+        return False, f"Could not set default playback device: {exc}"
+
+
 @dataclass
 class PeakNormalizerState:
     hot_frames: int = 0

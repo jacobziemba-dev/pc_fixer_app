@@ -260,6 +260,286 @@ def check_network_health():
     return ToolResult(not errors and bool(active_adapters), title, summary, details, errors)
 
 
+_DNS_PING_HOSTS = frozenset({
+    "one.one.one.one",
+    "1.1.1.1",
+    "dns.google",
+    "8.8.8.8",
+    "cloudflare.com",
+    "microsoft.com",
+    "www.microsoft.com",
+})
+
+
+def list_network_adapter_names():
+    """Lightweight adapter list for assistant snapshot targeting."""
+    adapters = []
+    try:
+        stats_map = psutil.net_if_stats()
+    except Exception:
+        return adapters
+    for name, stats in stats_map.items():
+        adapters.append({"name": name, "is_up": bool(getattr(stats, "isup", False))})
+    return adapters
+
+
+def list_network_adapters():
+    title = "Network Adapters"
+    adapters = list_network_adapter_names()
+    if not adapters:
+        return ToolResult(False, title, "No network adapters were found.")
+    details = [
+        f"{item['name']} ({'up' if item.get('is_up') else 'down'})"
+        for item in adapters
+    ]
+    return ToolResult(True, title, f"{len(adapters)} network adapter(s) found.", details)
+
+
+def check_dns_resolve(host="one.one.one.one"):
+    title = "DNS Resolve"
+    key = str(host or "").strip().lower()
+    if key not in _DNS_PING_HOSTS:
+        return ToolResult(
+            False,
+            title,
+            "Host is not on the allowlist.",
+            errors=[f"Allowed hosts: {', '.join(sorted(_DNS_PING_HOSTS))}"],
+        )
+    try:
+        infos = socket.getaddrinfo(key, None)
+        addresses = sorted({item[4][0] for item in infos if item and item[4]})
+    except OSError as exc:
+        return ToolResult(False, title, f"Could not resolve {key}.", errors=[str(exc)])
+    return ToolResult(
+        True,
+        title,
+        f"Resolved {key} to {', '.join(addresses[:4]) or 'no addresses'}.",
+        addresses[:8],
+    )
+
+
+def ping_host(host="one.one.one.one", count=2):
+    title = "Ping Host"
+    key = str(host or "").strip().lower()
+    if key not in _DNS_PING_HOSTS:
+        return ToolResult(
+            False,
+            title,
+            "Host is not on the allowlist.",
+            errors=[f"Allowed hosts: {', '.join(sorted(_DNS_PING_HOSTS))}"],
+        )
+    count = max(1, min(int(count or 2), 4))
+    if is_windows():
+        code, stdout, stderr = _run_command(["ping", "-n", str(count), key], timeout=20)
+    else:
+        code, stdout, stderr = _run_command(["ping", "-c", str(count), key], timeout=20)
+    success = code == 0
+    details = [line for line in (stdout or "").splitlines() if line.strip()][:8]
+    return ToolResult(
+        success,
+        title,
+        f"Ping {key} {'succeeded' if success else 'failed'}.",
+        details,
+        [stderr] if stderr and not success else [],
+    )
+
+
+def check_default_gateway():
+    title = "Default Gateway"
+    details = []
+    errors = []
+    try:
+        gateway_map = psutil.net_if_stats()
+        active = [name for name, stats in gateway_map.items() if stats.isup]
+        details.append(f"Active adapters: {', '.join(active) if active else 'none'}")
+    except Exception as exc:
+        errors.append(f"Adapter status failed: {exc}")
+    if is_windows():
+        data, error = _run_json_powershell(
+            "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | "
+            "Select-Object -First 3 InterfaceAlias,NextHop,RouteMetric | ConvertTo-Json -Compress",
+            timeout=15,
+        )
+        if error:
+            errors.append(error)
+        for entry in _as_list(data):
+            details.append(
+                f"Gateway {entry.get('InterfaceAlias', '')}: {entry.get('NextHop', '')} "
+                f"(metric {entry.get('RouteMetric', '?')})"
+            )
+    summary = "Default gateway details collected." if details and not errors else "Gateway check needs review."
+    return ToolResult(bool(details) and not errors, title, summary, details, errors)
+
+
+def show_wifi_status():
+    title = "Wi-Fi Status"
+    if not is_windows():
+        return windows_only_result(title)
+    code, stdout, stderr = _run_command(["netsh", "wlan", "show", "interfaces"], timeout=15)
+    if code != 0:
+        return ToolResult(False, title, "Could not read Wi-Fi status.", errors=[stderr or stdout])
+    details = []
+    for line in (stdout or "").splitlines():
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if lowered.startswith(("ssid", "state", "signal", "radio", "profile", "name")):
+            # Never capture keys/security material beyond SSID/state/signal.
+            if "key content" in lowered or "password" in lowered:
+                continue
+            details.append(stripped)
+    if not details:
+        details = [line.strip() for line in (stdout or "").splitlines() if line.strip()][:8]
+    return ToolResult(True, title, "Wi-Fi status collected.", details[:12])
+
+
+def get_recycle_bin_size():
+    title = "Recycle Bin Size"
+    try:
+        size = sysinfo._recycle_bin_size()
+    except Exception as exc:
+        return ToolResult(False, title, "Could not read Recycle Bin size.", errors=[str(exc)])
+    return ToolResult(True, title, f"Recycle Bin is using {sysinfo.format_bytes(size)}.", [sysinfo.format_bytes(size)])
+
+
+def empty_recycle_bin():
+    title = "Empty Recycle Bin"
+    if not is_windows():
+        return windows_only_result(title)
+    ok = sysinfo._run_powershell_command("Clear-RecycleBin -Force -ErrorAction SilentlyContinue")
+    if ok:
+        return ToolResult(True, title, "Recycle Bin emptied.")
+    return ToolResult(False, title, "Could not empty the Recycle Bin.")
+
+
+def clean_cleanup_categories_by_keys(category_keys):
+    title = "Clean Categories"
+    wanted = {str(key) for key in (category_keys or []) if str(key).strip()}
+    if not wanted:
+        return ToolResult(False, title, "No cleanup categories were selected.")
+    try:
+        scanned = sysinfo.scan_cleanup_targets()
+    except Exception as exc:
+        return ToolResult(False, title, "Cleanup scan failed.", errors=[str(exc)])
+    categories = [cat for cat in scanned if cat.key in wanted]
+    if not categories:
+        return ToolResult(False, title, "No matching scanned cleanup categories were found.")
+    bytes_freed, errors = sysinfo.delete_cleanup_items(categories)
+    return ToolResult(
+        not errors,
+        title,
+        f"Freed {sysinfo.format_bytes(bytes_freed)}.",
+        [f"{cat.label}: {sysinfo.format_bytes(cat.size_bytes)}" for cat in categories],
+        errors,
+    )
+
+
+def check_system_uptime():
+    title = "System Uptime"
+    try:
+        boot = datetime.fromtimestamp(psutil.boot_time())
+        uptime = datetime.now() - boot
+        hours = int(uptime.total_seconds() // 3600)
+        minutes = int((uptime.total_seconds() % 3600) // 60)
+        details = [f"Boot time: {boot.isoformat(sep=' ', timespec='seconds')}", f"Uptime: {hours}h {minutes}m"]
+        return ToolResult(True, title, f"PC has been up for {hours}h {minutes}m.", details)
+    except Exception as exc:
+        return ToolResult(False, title, "Could not read system uptime.", errors=[str(exc)])
+
+
+def check_memory_pressure():
+    title = "Memory Pressure"
+    try:
+        mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        details = [
+            f"RAM used: {sysinfo.format_bytes(mem.used)} / {sysinfo.format_bytes(mem.total)} ({mem.percent:.0f}%)",
+            f"RAM available: {sysinfo.format_bytes(mem.available)}",
+            f"Pagefile/swap used: {sysinfo.format_bytes(swap.used)} / {sysinfo.format_bytes(swap.total)} ({swap.percent:.0f}%)",
+        ]
+        stressed = mem.percent >= 85 or swap.percent >= 70
+        summary = "Memory pressure looks high." if stressed else "Memory pressure looks moderate."
+        return ToolResult(True, title, summary, details)
+    except Exception as exc:
+        return ToolResult(False, title, "Could not read memory pressure.", errors=[str(exc)])
+
+
+def list_installed_gpus():
+    title = "Installed GPUs"
+    try:
+        hardware = sysinfo.get_hardware_info()
+        gpus = hardware.get("gpu") or []
+    except Exception as exc:
+        return ToolResult(False, title, "Could not read GPU information.", errors=[str(exc)])
+    names = []
+    for item in gpus:
+        if isinstance(item, dict):
+            name = item.get("Name") or item.get("name")
+            if name:
+                names.append(str(name))
+    if not names:
+        return ToolResult(False, title, "No GPU entries were found.")
+    return ToolResult(True, title, f"{len(names)} GPU(s) found.", names)
+
+
+def open_system_tool(tool_key):
+    title = "Open System Tool"
+    if not is_windows():
+        return windows_only_result(title)
+    mapping = {
+        "task_manager": ["taskmgr.exe"],
+        "resource_monitor": ["resmon.exe"],
+        "device_manager": ["devmgmt.msc"],
+    }
+    key = str(tool_key or "").strip().lower()
+    command = mapping.get(key)
+    if not command:
+        return ToolResult(
+            False,
+            title,
+            "Unsupported system tool.",
+            errors=[f"Allowed tools: {', '.join(sorted(mapping))}"],
+        )
+    try:
+        if key == "device_manager":
+            os.startfile(command[0])  # noqa: S606 - fixed allowlist only
+        else:
+            code, _stdout, stderr = _run_command(command, timeout=10)
+            if code != 0:
+                return ToolResult(False, title, f"Could not open {key}.", errors=[stderr] if stderr else [])
+    except OSError as exc:
+        return ToolResult(False, title, f"Could not open {key}.", errors=[str(exc)])
+    return ToolResult(True, title, f"Opened {key}.", command)
+
+
+def capture_window_layout(name="Assistant Layout"):
+    title = "Capture Layout"
+    from app import window_layouts
+
+    safe_name = str(name or "Assistant Layout").strip()[:80] or "Assistant Layout"
+    try:
+        layout = window_layouts.capture_current_layout(safe_name)
+        layouts = window_layouts.load_layouts()
+        layouts.append(layout)
+        window_layouts.save_layouts(layouts)
+    except Exception as exc:
+        return ToolResult(False, title, "Could not capture the current layout.", errors=[str(exc)])
+    layout_id = (layout or {}).get("id", "")
+    return ToolResult(
+        True,
+        title,
+        f"Saved layout \"{safe_name}\".",
+        [f"id={layout_id}"] if layout_id else [],
+    )
+
+
+def set_default_audio_device(device_id):
+    title = "Set Default Audio Device"
+    from app import audio_control
+
+    ok, message = audio_control.set_default_output_device(str(device_id or ""))
+    return ToolResult(ok, title, message)
+
+
 def flush_dns_cache():
     title = "Flush DNS Cache"
     if not is_windows():
@@ -607,6 +887,11 @@ _SETTINGS_PAGES = {
     "windows_update": "ms-settings:windowsupdate",
     "apps": "ms-settings:appsfeatures",
     "sound": "ms-settings:sound",
+    "storage": "ms-settings:storagesense",
+    "power": "ms-settings:powersleep",
+    "privacy": "ms-settings:privacy",
+    "troubleshoot": "ms-settings:troubleshoot",
+    "about": "ms-settings:about",
 }
 
 
@@ -633,9 +918,13 @@ def open_windows_settings(page):
 def _known_folders():
     local = os.environ.get("LOCALAPPDATA", "")
     appdata = os.environ.get("APPDATA", "")
+    home = Path.home()
     return {
         "temp": os.environ.get("TEMP") or os.environ.get("TMP") or "",
-        "downloads": str(Path.home() / "Downloads"),
+        "downloads": str(home / "Downloads"),
+        "desktop": str(home / "Desktop"),
+        "documents": str(home / "Documents"),
+        "pictures": str(home / "Pictures"),
         "startup": os.path.join(appdata, r"Microsoft\Windows\Start Menu\Programs\Startup"),
         "local_appdata": local,
         "recycle_bin": "shell:RecycleBinFolder",

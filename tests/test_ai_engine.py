@@ -10,6 +10,7 @@ from app.assistant_core import AssistantTurn
 from app.ai_engine import (
     AIEngineError,
     DEFAULT_MODEL_FILENAME,
+    DEFAULT_N_CTX,
     EmbeddedAI,
     MODELS_DIR,
     SNAPSHOT_UNAVAILABLE,
@@ -23,6 +24,7 @@ from app.ai_engine import (
     resolve_model_path,
     trim_chat_history,
 )
+from app.assistant_core import select_skill_names_for_prompt
 
 
 def test_resolve_model_path_uses_project_models_dir():
@@ -39,6 +41,30 @@ def test_format_chat_prompt_uses_llama32_template():
         "<|start_header_id|>user<|end_header_id|>\n\n"
         "User text<|eot_id|>"
         "<|start_header_id|>assistant<|end_header_id|>\n\n"
+    )
+
+
+def test_format_chat_prompt_includes_native_history_turns():
+    history = [AssistantTurn("What is high?", "CPU is high.", MagicMock())]
+    prompt = format_chat_prompt("System text", "What next?", history=history)
+    assert "<|start_header_id|>user<|end_header_id|>\n\nWhat is high?<|eot_id|>" in prompt
+    assert "<|start_header_id|>assistant<|end_header_id|>\n\nCPU is high.<|eot_id|>" in prompt
+    assert prompt.count("<|start_header_id|>user<|end_header_id|>") == 2
+
+
+def test_embedded_ai_defaults_to_4096_context():
+    assert DEFAULT_N_CTX == 4096
+    engine = EmbeddedAI(model_path="unused.gguf")
+    assert engine.n_ctx == 4096
+
+
+def test_build_skill_catalog_filters_by_intent():
+    full = build_skill_catalog("what can you do")
+    slow = build_skill_catalog("Why is my PC slow?")
+    assert "scan_cleanup" in slow
+    assert len(slow) < len(full)
+    assert len(select_skill_names_for_prompt("Why is my PC slow?")) < len(
+        select_skill_names_for_prompt("what can you do")
     )
 
 
@@ -103,7 +129,7 @@ def test_embedded_ai_query_returns_trimmed_text(tmp_path):
     assert result == "Hello there"
     mock_llm.assert_called_once()
     call_kwargs = mock_llm.call_args.kwargs
-    assert call_kwargs["max_tokens"] == 256
+    assert call_kwargs["max_tokens"] == 320
     assert call_kwargs["temperature"] == 0.3
     assert call_kwargs["stop"] == ["<|eot_id|>"]
 
@@ -235,15 +261,29 @@ def test_format_chat_history_uses_user_and_assistant_lines():
     assert "Assistant: CPU is high." in result
 
 
-def test_compose_user_prompt_with_history():
+def test_compose_user_prompt_does_not_inline_history():
     history = [AssistantTurn("What is high?", "CPU is high.", MagicMock())]
 
     result = compose_user_prompt("What next?", "CPU: 90%", history)
 
     assert "System snapshot:" in result
-    assert "Recent conversation:" in result
-    assert "Assistant: CPU is high." in result
+    assert "Recent conversation:" not in result
+    assert "Assistant: CPU is high." not in result
     assert "User question: What next?" in result
+
+
+def test_trim_chat_history_respects_char_budget():
+    history = [
+        {"user": "u" * 400, "assistant": "a" * 400},
+        {"user": "recent", "assistant": "answer"},
+    ]
+    trimmed = trim_chat_history(history, max_turns=8, max_chars=100)
+    assert len(trimmed) == 1
+    assert _turn_user(trimmed[0]) == "recent"
+
+
+def _turn_user(turn):
+    return turn["user"] if isinstance(turn, dict) else turn.user
 
 
 def test_build_system_context_happy_path():

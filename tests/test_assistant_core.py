@@ -460,3 +460,20 @@ def test_dedupe_actions_uses_kind_and_payload():
     other = AssistantAction("3", "refresh_network", "C", "C", READ_ONLY, payload={"x": 1})
 
     assert dedupe_actions([first, duplicate, other]) == [first, other]
+
+
+def test_detect_skill_domains_windows_updates_excludes_layouts():
+    from app.assistant_core import detect_skill_domains
+
+    domains = detect_skill_domains("check windows updates")
+
+    assert "layouts" not in domains
+    assert "security" in domains
+
+
+def test_detect_skill_domains_still_matches_layout_intents():
+    from app.assistant_core import detect_skill_domains
+
+    assert "layouts" in detect_skill_domains("arrange my windows")
+    assert "layouts" in detect_skill_domains("restore my window layout")
+    assert "layouts" in detect_skill_domains("save this desktop layout")

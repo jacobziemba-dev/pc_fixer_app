@@ -755,8 +755,8 @@ ASSISTANT_SKILLS = {
     ),
     "restart_network_adapter": AssistantSkill(
         "restart_network_adapter",
-        "Restart one named network adapter.",
-        {"adapter_name": "str"},
+        "Restart one named network adapter after Python resolves the adapter target.",
+        {"adapter_name": "str?"},
         ASSISTANT_TOOLS["restart_network_adapter"].risk,
         ASSISTANT_TOOLS["restart_network_adapter"].requires_confirmation,
         "restart_network_adapter",
@@ -827,8 +827,8 @@ ASSISTANT_SKILLS = {
     ),
     "set_startup_item_enabled": AssistantSkill(
         "set_startup_item_enabled",
-        "Enable or disable one allowlisted startup item.",
-        {"name": "str", "source": "str", "enabled": "bool", "command": "str?"},
+        "Enable or disable one allowlisted startup item after Python resolves it from the snapshot.",
+        {"name": "str?", "source": "str?", "enabled": "bool", "command": "str?"},
         ASSISTANT_TOOLS["set_startup_item_enabled"].risk,
         ASSISTANT_TOOLS["set_startup_item_enabled"].requires_confirmation,
         "set_startup_item_enabled",
@@ -1205,6 +1205,9 @@ def detect_skill_domains(user_text):
 
 
 def select_skill_names_for_prompt(user_text=None):
+    # No user text: full catalog (docs/tests). Intent filtering applies once Chat passes the question.
+    if user_text is None or not str(user_text).strip():
+        return [name for name, skill in ASSISTANT_SKILLS.items() if skill.enabled]
     domains = detect_skill_domains(user_text)
     if "*" in domains:
         return [name for name, skill in ASSISTANT_SKILLS.items() if skill.enabled]
@@ -1511,6 +1514,14 @@ def render_snapshot_context(snapshot):
         )
     elif "network" in snapshot.unavailable:
         lines.append("Network: unavailable")
+
+    if getattr(snapshot, "network_adapters", None):
+        adapter_bits = [
+            f"{item.get('name')}({'up' if item.get('is_up') else 'down'})"
+            for item in snapshot.network_adapters[:6]
+        ]
+        if adapter_bits:
+            lines.append("Network adapters: " + ", ".join(adapter_bits))
 
     if snapshot.hardware_summary:
         hardware = snapshot.hardware_summary
@@ -2040,9 +2051,10 @@ def skill_request_to_action(request, snapshot=None):
         ), ""
 
     if kind == "restart_network_adapter":
-        adapter_name = str(args.get("adapter_name", "")).strip()
-        if not adapter_name:
-            return None, "No network adapter was selected."
+        adapter, message = _resolve_adapter(args, snapshot)
+        if not adapter:
+            return None, message
+        adapter_name = adapter["name"]
         return _action(
             kind,
             description=f"Restart network adapter {adapter_name}.",
@@ -2072,10 +2084,27 @@ def skill_request_to_action(request, snapshot=None):
     if kind == "scan_large_files":
         payload = {}
         if args.get("root"):
-            payload["root"] = str(args["root"])
+            root, message = _resolve_allowlisted_scan_root(args.get("root"), snapshot)
+            if not root:
+                return None, message
+            payload["root"] = root
         if args.get("min_size_mb"):
             payload["min_size_mb"] = int(args["min_size_mb"])
         return _action(kind, payload=payload), ""
+
+    if kind in {"scan_downloads_large_files", "scan_desktop_large_files"}:
+        folder_name = "Downloads" if kind == "scan_downloads_large_files" else "Desktop"
+        from pathlib import Path
+        root = str((Path.home() / folder_name).expanduser().resolve())
+        payload = {"root": root}
+        if args.get("min_size_mb"):
+            payload["min_size_mb"] = int(args["min_size_mb"])
+        return _action(
+            "scan_large_files",
+            title=ASSISTANT_TOOLS[kind].title,
+            description=ASSISTANT_TOOLS[kind].description,
+            payload=payload,
+        ), ""
 
     if kind == "scan_folder_sizes":
         payload = {}
@@ -2092,37 +2121,49 @@ def skill_request_to_action(request, snapshot=None):
         return _action(kind, payload=payload), ""
 
     if kind == "end_process":
-        pid = int(args["pid"])
-        allowed, info = sysinfo.is_process_termination_allowed(pid)
+        process, message = _resolve_process(args, snapshot)
+        if not process:
+            return None, message
+        pid = int(process["pid"])
+        allowed, info = sysinfo.is_process_termination_allowed(pid, process.get("name", ""))
         if not allowed:
             return None, info
         return _action(
             kind,
-            description=f"End process PID {pid}.",
+            description=f"End process {process.get('name', 'PID')} (PID {pid}).",
             payload={"pid": pid},
         ), ""
 
     if kind == "set_startup_item_enabled":
-        name = str(args.get("name", "")).strip()
-        source = str(args.get("source", "")).strip()
+        item, message = _resolve_startup_item(args, snapshot)
+        if not item:
+            return None, message
         enabled = bool(args.get("enabled"))
-        if not name or not source:
-            return None, "Startup item name and source are required."
-        payload = {"name": name, "source": source, "enabled": enabled}
-        if args.get("command"):
-            payload["command"] = str(args["command"])
+        payload = {
+            "name": item.get("name", ""),
+            "source": item.get("source", ""),
+            "enabled": enabled,
+        }
+        if item.get("command"):
+            payload["command"] = str(item["command"])
         verb = "Enable" if enabled else "Disable"
         return _action(
             kind,
-            description=f"{verb} startup item \"{name}\" ({source}).",
+            description=f"{verb} startup item \"{payload['name']}\" ({payload['source']}).",
             payload=payload,
         ), ""
 
     if kind == "open_windows_settings":
         page = str(args.get("page", "")).strip().lower()
-        allowed = {"display", "network", "windows_update", "apps", "sound"}
+        allowed = {
+            "display", "network", "windows_update", "apps", "sound",
+            "storage", "power", "privacy", "troubleshoot", "about",
+        }
         if page not in allowed:
-            return None, "Settings page must be display, network, windows_update, apps, or sound."
+            return None, (
+                "Settings page must be display, network, windows_update, apps, sound, "
+                "storage, power, privacy, troubleshoot, or about."
+            )
         return _action(
             kind,
             description=f"Open Windows Settings page ({page}).",
@@ -2131,14 +2172,66 @@ def skill_request_to_action(request, snapshot=None):
 
     if kind == "open_known_folder":
         folder = str(args.get("folder", "")).strip().lower()
-        allowed = {"temp", "downloads", "startup", "local_appdata", "recycle_bin"}
+        allowed = {
+            "temp", "downloads", "desktop", "documents", "pictures",
+            "startup", "local_appdata", "recycle_bin",
+        }
         if folder not in allowed:
-            return None, "Folder must be temp, downloads, startup, local_appdata, or recycle_bin."
+            return None, (
+                "Folder must be temp, downloads, desktop, documents, pictures, "
+                "startup, local_appdata, or recycle_bin."
+            )
         return _action(
             kind,
             description=f"Open known folder ({folder}).",
             payload={"folder": folder},
         ), ""
+
+    if kind in {"clean_temp_files", "clean_browser_cache", "clean_thumbnail_cache"}:
+        key_map = {
+            "clean_temp_files": {"user_temp", "windows_temp"},
+            "clean_browser_cache": {"chrome_cache", "edge_cache", "firefox_cache"},
+            "clean_thumbnail_cache": {"thumbnail_cache"},
+        }
+        return _action(
+            kind,
+            description=ASSISTANT_TOOLS[kind].description,
+            payload={"category_keys": sorted(key_map[kind])},
+        ), ""
+
+    if kind == "check_dns_resolve":
+        host = str(args.get("host") or "one.one.one.one").strip().lower()
+        return _action(kind, payload={"host": host}), ""
+
+    if kind == "ping_host":
+        host = str(args.get("host") or "one.one.one.one").strip().lower()
+        count = int(args.get("count", 2))
+        return _action(kind, payload={"host": host, "count": count}), ""
+
+    if kind == "capture_layout_snapshot":
+        name = str(args.get("name") or "Assistant Layout").strip()[:80] or "Assistant Layout"
+        return _action(
+            kind,
+            description=f"Save the current window layout as \"{name}\".",
+            payload={"name": name},
+        ), ""
+
+    if kind == "set_default_audio_device":
+        device, message = _resolve_audio_device(args, snapshot)
+        if not device:
+            return None, message
+        return _action(
+            kind,
+            description=f"Set default playback device to {device['name']}.",
+            payload={"device_id": device["id"]},
+        ), ""
+
+    if kind in {
+        "open_task_manager",
+        "open_resource_monitor",
+        "open_device_manager",
+    }:
+        return _action(kind, payload={"tool": kind.replace("open_", "")}), ""
 
     if kind == "create_restore_point":
         description = str(args.get("description") or "PC Fix restore point")
@@ -2180,6 +2273,129 @@ def merge_action_lists(*action_lists):
     for actions in action_lists:
         merged.extend(actions or [])
     return dedupe_actions(merged)
+
+
+def _allowlisted_scan_roots(snapshot=None):
+    from pathlib import Path
+    import os
+
+    candidates = [
+        Path.home(),
+        Path.home() / "Downloads",
+        Path.home() / "Desktop",
+        Path.home() / "Documents",
+        Path.home() / "Pictures",
+        Path(os.environ.get("TEMP") or os.environ.get("TMP") or ""),
+    ]
+    roots = []
+    for path in candidates:
+        try:
+            resolved = str(path.expanduser().resolve())
+        except OSError:
+            continue
+        if resolved and os.path.isdir(resolved):
+            roots.append(os.path.normcase(resolved))
+    if snapshot:
+        for cat in getattr(snapshot, "cleanup_categories", []) or []:
+            for cleanup_path in getattr(cat, "paths", []) or []:
+                try:
+                    resolved = os.path.normcase(str(Path(cleanup_path).expanduser().resolve()))
+                except OSError:
+                    continue
+                if resolved and os.path.isdir(resolved):
+                    roots.append(resolved)
+    return sorted(set(roots))
+
+
+def _resolve_allowlisted_scan_root(root, snapshot=None):
+    import os
+    from pathlib import Path
+
+    if not root:
+        return None, "No scan root was provided."
+    try:
+        resolved = str(Path(root).expanduser().resolve())
+    except OSError:
+        return None, "That scan root could not be resolved."
+    if not os.path.isdir(resolved):
+        return None, "That scan root does not exist."
+    normalized = os.path.normcase(resolved)
+    for allowed in _allowlisted_scan_roots(snapshot):
+        try:
+            if os.path.commonpath([normalized, allowed]) == allowed:
+                return resolved, ""
+        except ValueError:
+            continue
+    return None, "Scan root must be under an allowlisted folder (home, Downloads, Desktop, Documents, Pictures, temp, or scanned cleanup paths)."
+
+
+def _resolve_adapter(args, snapshot):
+    adapters = getattr(snapshot, "network_adapters", []) if snapshot else []
+    if not adapters:
+        adapters = toolbox.list_network_adapter_names()
+    if not adapters:
+        return None, "No network adapters were found. Refresh network information first."
+    needle = str(args.get("adapter_name") or "").strip().lower()
+    if not needle:
+        up = [item for item in adapters if item.get("is_up")]
+        if len(up) == 1:
+            matches = up
+        elif len(adapters) == 1:
+            matches = adapters
+        elif len(up) > 1:
+            matches = up
+        else:
+            matches = adapters if len(adapters) > 1 else []
+    else:
+        matches = [item for item in adapters if needle in str(item.get("name", "")).lower()]
+    return _single_match(matches, "network adapter")
+
+
+def _resolve_startup_item(args, snapshot):
+    items = getattr(snapshot, "startup_items", []) if snapshot else []
+    if not items:
+        return None, "Refresh startup programs before changing a startup item."
+    name = str(args.get("name") or "").strip().lower()
+    source = str(args.get("source") or "").strip().lower()
+    matches = items
+    if name:
+        matches = [item for item in matches if name in str(item.get("name", "")).lower()]
+    if source:
+        matches = [item for item in matches if source in str(item.get("source", "")).lower()]
+    if not name and not source:
+        return None, "Provide a startup item name (and source if needed)."
+    return _single_match(matches, "startup item")
+
+
+def _resolve_process(args, snapshot):
+    processes = []
+    if snapshot:
+        processes.extend(getattr(snapshot, "top_cpu_processes", []) or [])
+        processes.extend(getattr(snapshot, "top_memory_processes", []) or [])
+    # Dedupe by pid
+    by_pid = {}
+    for process in processes:
+        try:
+            by_pid[int(process.get("pid"))] = process
+        except (TypeError, ValueError):
+            continue
+    processes = list(by_pid.values())
+    if args.get("pid") is not None:
+        pid = int(args["pid"])
+        match = by_pid.get(pid)
+        if match:
+            return match, ""
+        return {"pid": pid, "name": ""}, ""
+    needle = str(args.get("process_name") or args.get("app") or "").strip().lower()
+    if not needle:
+        return None, "Provide a process pid or process name from the snapshot."
+    if not processes:
+        return None, "Refresh top processes before ending a process by name."
+    matches = [
+        process for process in processes
+        if needle in str(process.get("name", "")).lower()
+    ]
+    return _single_match(matches, "process")
 
 
 def _resolve_display(args, snapshot):
@@ -2392,6 +2608,38 @@ def _execute_toolbox_action(action):
         return toolbox.create_restore_point(payload.get("description", "PC Fix restore point"))
     if kind == "export_pc_report":
         return toolbox.export_pc_report()
+    if kind == "get_recycle_bin_size":
+        return toolbox.get_recycle_bin_size()
+    if kind == "empty_recycle_bin":
+        return toolbox.empty_recycle_bin()
+    if kind in {"clean_temp_files", "clean_browser_cache", "clean_thumbnail_cache"}:
+        return toolbox.clean_cleanup_categories_by_keys(payload.get("category_keys", []))
+    if kind == "list_network_adapters":
+        return toolbox.list_network_adapters()
+    if kind == "check_dns_resolve":
+        return toolbox.check_dns_resolve(payload.get("host", "one.one.one.one"))
+    if kind == "ping_host":
+        return toolbox.ping_host(payload.get("host", "one.one.one.one"), payload.get("count", 2))
+    if kind == "check_default_gateway":
+        return toolbox.check_default_gateway()
+    if kind == "show_wifi_status":
+        return toolbox.show_wifi_status()
+    if kind == "check_system_uptime":
+        return toolbox.check_system_uptime()
+    if kind == "check_memory_pressure":
+        return toolbox.check_memory_pressure()
+    if kind == "list_installed_gpus":
+        return toolbox.list_installed_gpus()
+    if kind == "open_task_manager":
+        return toolbox.open_system_tool("task_manager")
+    if kind == "open_resource_monitor":
+        return toolbox.open_system_tool("resource_monitor")
+    if kind == "open_device_manager":
+        return toolbox.open_system_tool("device_manager")
+    if kind == "capture_layout_snapshot":
+        return toolbox.capture_window_layout(payload.get("name", "Assistant Layout"))
+    if kind == "set_default_audio_device":
+        return toolbox.set_default_audio_device(payload.get("device_id", ""))
     return None
 
 

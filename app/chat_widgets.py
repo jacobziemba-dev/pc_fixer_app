@@ -106,10 +106,21 @@ class ActionCard(QFrame):
             "Confirmation required" if action.requires_confirmation else "Read-only"
         )
         detail_bits.append(f"Risk: {action.risk}")
-        meta = QLabel("  •  ".join(detail_bits))
-        meta.setProperty("role", "action-meta-value")
-        meta.setWordWrap(True)
-        layout.addWidget(meta)
+        self.meta_label = QLabel("  •  ".join(detail_bits))
+        self.meta_label.setProperty("role", "action-meta-value")
+        self.meta_label.setWordWrap(True)
+        layout.addWidget(self.meta_label)
+
+        self.effect_label = QLabel(f"What will happen: {self._expected_result(action)}")
+        self.effect_label.setProperty("role", "caption")
+        self.effect_label.setWordWrap(True)
+        layout.addWidget(self.effect_label)
+
+        self.result_label = QLabel("")
+        self.result_label.setProperty("role", "caption")
+        self.result_label.setWordWrap(True)
+        self.result_label.setVisible(False)
+        layout.addWidget(self.result_label)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
@@ -123,30 +134,40 @@ class ActionCard(QFrame):
         buttons.addWidget(self.cancel_btn)
         buttons.addWidget(self.confirm_btn)
         layout.addLayout(buttons)
-
-    def _meta_row(self, label, value):
-        row = QVBoxLayout()
-        row.setSpacing(2)
-        key = QLabel(label.upper())
-        key.setProperty("role", "action-meta-label")
-        val = QLabel(value)
-        val.setProperty("role", "action-meta-value")
-        val.setWordWrap(True)
-        row.addWidget(key)
-        row.addWidget(val)
-        return row
+        self._pending = False
 
     def _confirm(self):
-        self._set_done("Confirmed")
+        # Do not mark Confirmed until the parent actually runs the action.
+        self.confirm_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        self.confirm_btn.setText("Running…")
+        self._pending = True
         self.confirmed.emit(self._action, self)
 
     def _cancel(self):
+        self.mark_cancelled()
+
+    def mark_confirmed(self):
+        self._set_done("Confirmed")
+
+    def mark_cancelled(self):
         self._set_done("Cancelled")
+
+    def mark_failed(self, message="Failed"):
+        self._set_done("Failed")
+        self.set_result(False, message)
+
+    def set_result(self, success, message):
+        prefix = "Result: " if success else "Error: "
+        text = f"{prefix}{(message or '').strip()}"
+        self.result_label.setText(text)
+        self.result_label.setVisible(bool(text.strip()))
 
     def _set_done(self, text):
         self.confirm_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.confirm_btn.setText(text)
+        self._pending = False
 
     def _target_text(self, action):
         payload = action.payload or {}
@@ -156,26 +177,38 @@ class ActionCard(QFrame):
             payload.get("process_name"),
             payload.get("pid"),
             payload.get("layout_id"),
+            payload.get("name"),
             ", ".join(payload.get("category_keys", []))
             if isinstance(payload.get("category_keys"), list)
             else "",
             payload.get("adapter_name"),
             payload.get("plan_name"),
             payload.get("root"),
+            payload.get("host"),
+            payload.get("page"),
+            payload.get("folder"),
         ]
         return next((str(value) for value in candidates if value), "")
 
     def _expected_result(self, action):
         if action.kind.startswith("refresh") or action.kind.startswith("check") or action.kind.startswith("scan"):
             return "collect current information and update the app."
-        if action.kind == "clean_cleanup_candidates":
-            return "delete only the scanned cleanup categories shown in this app."
+        if action.kind in {
+            "clean_cleanup_candidates",
+            "clean_temp_files",
+            "clean_browser_cache",
+            "clean_thumbnail_cache",
+            "empty_recycle_bin",
+        }:
+            return "delete only the allowlisted cleanup targets shown for this action."
         if action.kind == "set_display_refresh_rate":
             return "change only the selected display refresh rate."
-        if action.kind.startswith("audio_"):
-            return "apply the selected audio change to the resolved app session."
+        if action.kind.startswith("audio_") or action.kind == "set_default_audio_device":
+            return "apply the selected audio change to the resolved device or app session."
         if action.kind == "load_saved_layout":
             return "move matching windows and launch missing apps when possible."
+        if action.kind == "capture_layout_snapshot":
+            return "save the current window layout for later restore."
         if action.kind == "flush_dns_cache":
             return "clear Windows DNS resolver cache."
         if action.kind == "restart_network_adapter":
@@ -272,6 +305,7 @@ class _SubmitTextEdit(QTextEdit):
 
 class ChatInputDock(QFrame):
     submitted = Signal(str)
+    stop_requested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -292,12 +326,23 @@ class ChatInputDock(QFrame):
         self.editor.submit_requested.connect(self._submit)
         layout.addWidget(self.editor, 1)
 
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setProperty("variant", "secondary")
+        self.stop_btn.setCursor(Qt.PointingHandCursor)
+        self.stop_btn.clicked.connect(self.stop_requested.emit)
+        self.stop_btn.setVisible(False)
+        layout.addWidget(self.stop_btn, 0, Qt.AlignBottom)
+
         self.send_btn = QPushButton("Send >")
         self.send_btn.setProperty("variant", "chat-send")
         self.send_btn.setCursor(Qt.PointingHandCursor)
         self.send_btn.clicked.connect(self._submit)
         layout.addWidget(self.send_btn, 0, Qt.AlignBottom)
         self.set_input_enabled(False)
+
+    def set_stop_visible(self, visible):
+        self.stop_btn.setVisible(bool(visible))
+        self.stop_btn.setEnabled(bool(visible))
 
     def eventFilter(self, watched, event):
         if watched is self.editor and event.type() == QEvent.FocusIn:

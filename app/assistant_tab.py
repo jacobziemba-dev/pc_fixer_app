@@ -3,7 +3,7 @@ from datetime import datetime
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QMessageBox,
+    QScrollArea, QFrame,
 )
 
 from app.ai_engine import (
@@ -29,7 +29,6 @@ from app.assistant_core import (
     AssistantTurn,
     TAB_ACTION_KINDS,
     collect_assistant_snapshot,
-    merge_action_lists,
     execute_assistant_action,
     propose_actions,
     skill_requests_to_actions,
@@ -44,6 +43,7 @@ from app.chat_widgets import (
     TypingIndicator,
     WelcomeState,
 )
+from app.job_queue import get_job_queue
 
 
 DISPLAY_REVIEW_PROMPT = "Review my display setup and mention anything unusual about monitor modes."
@@ -205,11 +205,12 @@ class AssistantTab(QWidget):
         self._current_assistant_bubble = None
         self._typing_indicator = None
         self._current_snapshot = None
+        self._pending_action_card = None
+        self._pending_actions = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        self.stop_action = None
 
         body_layout = QHBoxLayout()
         body_layout.setSpacing(0)
@@ -247,6 +248,8 @@ class AssistantTab(QWidget):
 
         self.input_dock = ChatInputDock()
         self.input_dock.submitted.connect(self._send_message_text)
+        self.input_dock.stop_requested.connect(self._stop_inference)
+        self.stop_action = self.input_dock.stop_btn
         thread_layout.addWidget(self.input_dock)
 
         body_layout.addWidget(thread_shell, 1)
@@ -430,12 +433,15 @@ class AssistantTab(QWidget):
         return row.bubble
 
     def _add_action_cards(self, actions):
+        self._pending_actions = list(actions or [])
         for action in actions:
             card = ActionCard(action)
             card.confirmed.connect(self._run_action)
             self.messages_layout.addWidget(card, 0, Qt.AlignLeft)
             self._update_empty_state()
         if actions:
+            if any(action.requires_confirmation for action in actions):
+                self._set_status("Waiting for confirm")
             QTimer.singleShot(0, self._scroll_to_bottom)
 
     def _scroll_to_bottom(self):
@@ -482,10 +488,8 @@ class AssistantTab(QWidget):
         self._typing_indicator = TypingIndicator()
         self.messages_layout.addWidget(self._typing_indicator)
         self._set_input_enabled(False)
-        if self.stop_action:
-            self.stop_action.setVisible(True)
-            self.stop_action.setEnabled(True)
-        self._set_status("Thinking")
+        self.input_dock.set_stop_visible(True)
+        self._set_status("Collecting snapshot")
         self.context_drawer.set_loading()
 
         self._infer_worker = InferenceWorker(
@@ -496,19 +500,38 @@ class AssistantTab(QWidget):
             include_cleanup=include_cleanup,
         )
         self._infer_worker.token_received.connect(self._on_token_received)
-        self._infer_worker.snapshot_ready.connect(self._on_snapshot_ready)
+        self._infer_worker.snapshot_ready.connect(self._on_inference_snapshot_ready)
         self._infer_worker.assistant_text_ready.connect(self._on_assistant_text_ready)
         self._infer_worker.skill_messages_ready.connect(self._on_skill_messages_ready)
         self._infer_worker.actions_ready.connect(self._add_action_cards)
         self._infer_worker.inference_complete.connect(self._on_inference_finished)
         self._infer_worker.cancelled.connect(self._on_inference_cancelled)
         self._infer_worker.error.connect(self._on_inference_error)
-        self._infer_worker.finished.connect(self._clear_infer_worker)
-        self._infer_worker.finished.connect(self._infer_worker.deleteLater)
-        self._infer_worker.start()
+
+        def on_rejected(message):
+            self._remove_typing_indicator()
+            self._add_message("system", message)
+            self._finish_inference_ui("Ready" if self._model_ready else "Model missing")
+
+        job_id = get_job_queue().submit(
+            scope="assistant-inference",
+            title="AI Chat inference",
+            worker=self._infer_worker,
+            result_signal="inference_complete",
+            on_result=lambda: None,
+            on_started=lambda: self._set_status("Thinking"),
+            on_finished=self._clear_infer_worker,
+            on_rejected=on_rejected,
+        )
+        if not job_id:
+            self._infer_worker = None
+
+    def _on_inference_snapshot_ready(self, snapshot):
+        self._set_status("Thinking")
+        self._on_snapshot_ready(snapshot)
 
     def _stop_inference(self):
-        if self._infer_worker and self._infer_worker.isRunning():
+        if self._infer_worker and self._worker_is_running(self._infer_worker):
             self._infer_worker.request_stop()
             self._set_status("Stopping")
 
@@ -608,9 +631,7 @@ class AssistantTab(QWidget):
 
     def _finish_inference_ui(self, status):
         self._pending_user_text = ""
-        if self.stop_action:
-            self.stop_action.setEnabled(False)
-            self.stop_action.setVisible(False)
+        self.input_dock.set_stop_visible(False)
         self._set_status(status)
         self._set_input_enabled(self._model_ready)
         if self._model_ready:
@@ -619,36 +640,61 @@ class AssistantTab(QWidget):
     def _run_action(self, action, card):
         if action.kind in TAB_ACTION_KINDS:
             self.action_requested.emit(action.kind, action.payload)
-            self._add_message("system", f"Requested: {action.title}.")
+            # Keep assistant snapshot in sync with tab refreshes.
+            self._refresh_snapshot(include_cleanup=False)
+            if hasattr(card, "mark_confirmed"):
+                card.mark_confirmed()
+            self._add_message("system", f"Requested: {action.title}. Snapshot refresh started.")
             return
 
-        if action.requires_confirmation:
-            reply = QMessageBox.question(
-                self,
-                "Confirm Assistant Action",
-                f"{action.description}\n\nContinue?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
-                self._add_message("system", "Assistant action cancelled.")
-                return
+        def on_rejected(message):
+            if hasattr(card, "mark_cancelled"):
+                card.mark_cancelled()
+            self._add_message("system", message)
+            self._set_status("Ready" if self._model_ready else "Model missing")
 
-        if self._worker_is_running(self._action_worker):
-            self._add_message("system", "Another assistant action is still running.")
-            return
-
+        self._pending_action_card = card
         self._set_status("Running action")
         self._action_worker = ActionWorker(action, self._current_snapshot)
-        self._action_worker.finished_with_result.connect(self._on_action_finished)
-        self._action_worker.finished.connect(self._clear_action_worker)
-        self._action_worker.finished.connect(self._action_worker.deleteLater)
-        self._action_worker.start()
+        job_id = get_job_queue().submit(
+            scope="assistant-actions",
+            title=action.title,
+            worker=self._action_worker,
+            result_signal="finished_with_result",
+            on_result=self._on_action_finished,
+            on_finished=self._clear_action_worker,
+            on_rejected=on_rejected,
+        )
+        if not job_id:
+            self._action_worker = None
+            self._pending_action_card = None
 
     def _clear_action_worker(self):
         self._action_worker = None
 
+    def _follow_up_actions_for(self, action_kind, snapshot):
+        if not snapshot:
+            return []
+        if action_kind in {
+            "scan_cleanup",
+            "clean_temp_files",
+            "clean_browser_cache",
+            "clean_thumbnail_cache",
+            "get_recycle_bin_size",
+        }:
+            follow_up = propose_actions("cleanup", snapshot)
+            return [
+                item for item in follow_up
+                if item.kind in {"clean_cleanup_candidates", "empty_recycle_bin"}
+            ][:1]
+        if action_kind in {"list_network_adapters", "check_network_health", "check_dns_resolve"}:
+            follow_up = propose_actions("network adapter", snapshot)
+            return [item for item in follow_up if item.kind == "flush_dns_cache"][:1]
+        return []
+
     def _on_action_finished(self, result, snapshot):
+        card = self._pending_action_card
+        self._pending_action_card = None
         if snapshot:
             self._on_snapshot_ready(snapshot)
         role = "system" if result.success else "error"
@@ -656,11 +702,14 @@ class AssistantTab(QWidget):
         if result.errors:
             message += "\n" + "\n".join(f"- {error}" for error in result.errors[:6])
         self._add_message(role, message)
-        if snapshot and result.success:
-            follow_up_actions = propose_actions("cleanup", snapshot)
-            cleanup_actions = [
-                action for action in follow_up_actions
-                if action.kind == "clean_cleanup_candidates"
-            ]
-            self._add_action_cards(cleanup_actions)
+        if card is not None:
+            if result.success:
+                card.mark_confirmed()
+                card.set_result(True, result.message)
+            else:
+                card.mark_failed(result.message)
+        action_kind = getattr(getattr(card, "_action", None), "kind", None)
+        follow_ups = self._follow_up_actions_for(action_kind, snapshot if result.success else None)
+        if follow_ups:
+            self._add_action_cards(follow_ups)
         self._set_status("Ready" if self._model_ready else "Model missing")

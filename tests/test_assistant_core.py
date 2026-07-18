@@ -313,11 +313,35 @@ def test_validate_skill_request_rejects_unknown_missing_and_wrong_type():
         "skill": "set_app_volume",
         "arguments": {"app": "chrome", "level": "quiet"},
     })
+    unknown_args = validate_skill_request({
+        "type": "skill_request",
+        "skill": "scan_cleanup",
+        "arguments": {"evil": "path"},
+    })
 
     assert not missing.success
     assert "Missing required argument: level" in missing.message
     assert not wrong.success
     assert "level" in wrong.message
+    assert not unknown_args.success
+    assert "Unknown argument" in unknown_args.message
+
+
+def test_scan_large_files_rejects_non_allowlisted_root(monkeypatch, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.setattr(
+        "app.assistant_core._allowlisted_scan_roots",
+        lambda snapshot=None: [],
+    )
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "scan_large_files",
+        "arguments": {"root": str(outside)},
+    }, AssistantSnapshot(datetime.now()))
+
+    assert action is None
+    assert "allowlisted" in message.lower()
 
 
 def test_skill_request_to_action_for_cleanup_scan():

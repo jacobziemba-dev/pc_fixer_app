@@ -27,17 +27,37 @@ def test_toolbox_skills_are_documented_in_catalog():
     assert "open_windows_settings" in catalog
 
 
-def test_restart_adapter_requires_adapter_name():
-    request = {
+def test_restart_adapter_resolves_from_snapshot():
+    snapshot = AssistantSnapshot(
+        datetime.now(),
+        network_adapters=[{"name": "Wi-Fi", "is_up": True}],
+    )
+    action, message = skill_request_to_action({
         "type": "skill_request",
         "skill": "restart_network_adapter",
         "arguments": {},
-    }
+    }, snapshot)
 
-    result = validate_skill_request(request)
+    assert message == ""
+    assert action.payload == {"adapter_name": "Wi-Fi"}
 
-    assert result.success is False
-    assert "adapter_name" in result.message
+
+def test_restart_adapter_rejects_when_ambiguous():
+    snapshot = AssistantSnapshot(
+        datetime.now(),
+        network_adapters=[
+            {"name": "Wi-Fi", "is_up": True},
+            {"name": "Ethernet", "is_up": True},
+        ],
+    )
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "restart_network_adapter",
+        "arguments": {},
+    }, snapshot)
+
+    assert action is None
+    assert "more than one" in message.lower()
 
 
 def test_set_power_plan_skill_validation_and_action_payload():
@@ -143,11 +163,15 @@ def test_open_windows_settings_skill_rejects_unknown_page():
 
 
 def test_set_startup_item_enabled_skill_payload():
+    snapshot = AssistantSnapshot(
+        datetime.now(),
+        startup_items=[{"name": "Steam", "source": "HKCU\\...\\Run", "command": "steam.exe"}],
+    )
     action, message = skill_request_to_action({
         "type": "skill_request",
         "skill": "set_startup_item_enabled",
         "arguments": {"name": "Steam", "source": "HKCU\\...\\Run", "enabled": False},
-    }, AssistantSnapshot(datetime.now()))
+    }, snapshot)
 
     assert message == ""
     assert action.kind == "set_startup_item_enabled"
@@ -156,6 +180,7 @@ def test_set_startup_item_enabled_skill_payload():
         "name": "Steam",
         "source": "HKCU\\...\\Run",
         "enabled": False,
+        "command": "steam.exe",
     }
 
 

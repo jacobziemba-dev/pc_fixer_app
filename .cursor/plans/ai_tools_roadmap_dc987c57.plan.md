@@ -4,19 +4,19 @@ overview: Evidence-based AI Chat roadmap. Phase 1 helpers are partially landed i
 todos:
   - id: phase-1-context
     content: "Phase 1: Finish wiring — pass user_text into catalog + history into stream_query; add/fix tests (helpers already in ai_engine/assistant_core)"
-    status: in_progress
+    status: completed
   - id: phase-2-validate
     content: "Phase 2: Fail-closed schema, scan path allowlists, adapter/startup/process resolve, gate keyword fallback, sync snapshot after tab refreshes"
-    status: pending
+    status: completed
   - id: phase-3-chat-ux
     content: "Phase 3: Single ActionCard confirm (fix Confirmed-on-cancel bug), richer cards, clearer status, wire Stop, smarter post-action follow-up"
-    status: pending
+    status: completed
   - id: phase-4-skills
     content: "Phase 4: Ship skill waves A→B→C (~20 skills) only after Phase 1 catalog is wired; update skills_list.md + tests"
-    status: pending
+    status: completed
   - id: phase-5-assistant-queue
     content: "Phase 5: JobQueue scopes for assistant-inference and assistant-actions only"
-    status: pending
+    status: completed
 isProject: false
 ---
 

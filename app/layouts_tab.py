@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from app import window_layouts
+from app.ui_kit import build_context_row, clear_layout, empty_row, rows_card, section_panel
 
 
 class LayoutScanWorker(QThread):
@@ -200,72 +201,6 @@ class LayoutPreviewCanvas(QWidget):
         painter.restore()
 
 
-def _clear_layout(layout):
-    while layout.count():
-        item = layout.takeAt(0)
-        widget = item.widget()
-        if widget is not None:
-            widget.deleteLater()
-        elif item.layout() is not None:
-            _clear_layout(item.layout())
-
-
-def _build_context_row(primary_text, secondary_text="", meta_text="", trailing=None):
-    row = QFrame()
-    row.setProperty("role", "context-row")
-    row_layout = QHBoxLayout(row)
-    row_layout.setContentsMargins(4, 10, 4, 10)
-    row_layout.setSpacing(10)
-
-    text_col = QVBoxLayout()
-    text_col.setSpacing(2)
-    primary = QLabel(primary_text)
-    primary.setProperty("role", "snapshot-key")
-    primary.setWordWrap(True)
-    text_col.addWidget(primary)
-    if secondary_text:
-        secondary = QLabel(secondary_text)
-        secondary.setProperty("role", "caption")
-        secondary.setWordWrap(True)
-        text_col.addWidget(secondary)
-    row_layout.addLayout(text_col, 1)
-
-    if meta_text:
-        meta = QLabel(meta_text)
-        meta.setProperty("role", "caption")
-        meta.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        row_layout.addWidget(meta)
-
-    if trailing is not None:
-        row_layout.addWidget(trailing)
-
-    return row
-
-
-def _empty_row(message):
-    row = QFrame()
-    row.setProperty("role", "context-row")
-    row_layout = QHBoxLayout(row)
-    row_layout.setContentsMargins(4, 14, 4, 14)
-    label = QLabel(message)
-    label.setProperty("role", "caption")
-    label.setWordWrap(True)
-    row_layout.addWidget(label)
-    return row
-
-
-def _rows_card():
-    card = QFrame()
-    card.setProperty("role", "context-rows")
-    card_layout = QVBoxLayout(card)
-    card_layout.setContentsMargins(10, 6, 10, 6)
-    card_layout.setSpacing(0)
-    rows_layout = QVBoxLayout()
-    rows_layout.setSpacing(0)
-    card_layout.addLayout(rows_layout)
-    return card, rows_layout
-
-
 def _layout_meta_text(layout):
     windows = layout.get("windows", [])
     displays = layout.get("displays", []) or window_layouts.displays_from_windows(windows)
@@ -402,15 +337,7 @@ class LayoutsTab(QWidget):
         QTimer.singleShot(0, self.refresh_current_layout)
 
     def _build_desktop_panel(self):
-        panel = QFrame()
-        panel.setProperty("role", "snapshot-panel")
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(16, 14, 16, 16)
-        panel_layout.setSpacing(10)
-
-        eyebrow = QLabel("CURRENT DESKTOP")
-        eyebrow.setProperty("role", "eyebrow")
-        panel_layout.addWidget(eyebrow)
+        panel, panel_layout = section_panel("CURRENT DESKTOP")
 
         splitter = QSplitter(Qt.Horizontal)
 
@@ -442,7 +369,7 @@ class LayoutsTab(QWidget):
         apps_scroll = QScrollArea()
         apps_scroll.setWidgetResizable(True)
         apps_scroll.setFrameShape(QFrame.NoFrame)
-        apps_rows_card, self.current_apps_rows = _rows_card()
+        apps_rows_card, self.current_apps_rows = rows_card()
         apps_scroll.setWidget(apps_rows_card)
         apps_layout.addWidget(apps_scroll, 1)
 
@@ -454,15 +381,7 @@ class LayoutsTab(QWidget):
         return panel
 
     def _build_saved_layouts_panel(self):
-        panel = QFrame()
-        panel.setProperty("role", "snapshot-panel")
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(16, 14, 16, 16)
-        panel_layout.setSpacing(10)
-
-        eyebrow = QLabel("SAVED LAYOUTS")
-        eyebrow.setProperty("role", "eyebrow")
-        panel_layout.addWidget(eyebrow)
+        panel, panel_layout = section_panel("SAVED LAYOUTS")
 
         splitter = QSplitter(Qt.Horizontal)
 
@@ -495,7 +414,7 @@ class LayoutsTab(QWidget):
         windows_scroll = QScrollArea()
         windows_scroll.setWidgetResizable(True)
         windows_scroll.setFrameShape(QFrame.NoFrame)
-        windows_rows_card, self.layout_windows_rows = _rows_card()
+        windows_rows_card, self.layout_windows_rows = rows_card()
         windows_scroll.setWidget(windows_rows_card)
         windows_layout.addWidget(windows_scroll, 1)
 
@@ -747,7 +666,7 @@ class LayoutsTab(QWidget):
         if not self._selected_layout_id and self._layouts:
             self._selected_layout_id = self._layouts[0].get("id", "")
 
-        _clear_layout(self.gallery_grid)
+        clear_layout(self.gallery_grid)
         self._layout_cards = []
         for index, layout in enumerate(self._layouts):
             card = LayoutCard(layout, self._select_layout, self._load_layout, self._delete_layout)
@@ -762,11 +681,11 @@ class LayoutsTab(QWidget):
 
     def _render_layout_windows(self):
         layout = self._find_layout(self._selected_layout_id)
-        _clear_layout(self.layout_windows_rows)
+        clear_layout(self.layout_windows_rows)
         windows = layout.get("windows", []) if layout else []
         if not windows:
             message = "This layout has no saved windows." if layout else "Select a saved layout to see its windows."
-            self.layout_windows_rows.addWidget(_empty_row(message))
+            self.layout_windows_rows.addWidget(empty_row(message))
             return
         for item in windows:
             app_name = item.get("process_name") or item.get("exe_path") or "Unknown app"
@@ -779,7 +698,7 @@ class LayoutsTab(QWidget):
             )
             secondary = f"{title} — {position}" if position else title
             meta = item.get("monitor_device", "")
-            self.layout_windows_rows.addWidget(_build_context_row(app_name, secondary, meta))
+            self.layout_windows_rows.addWidget(build_context_row(app_name, secondary, meta))
 
     def _refresh_current_preview(self):
         included = self._included_current_items()
@@ -826,10 +745,10 @@ class LayoutsTab(QWidget):
 
     def _render_current_apps(self, items):
         self._visible_current_items = list(items)
-        _clear_layout(self.current_apps_rows)
+        clear_layout(self.current_apps_rows)
         self._current_row_remove_buttons = []
         if not items:
-            self.current_apps_rows.addWidget(_empty_row("No open app windows detected."))
+            self.current_apps_rows.addWidget(empty_row("No open app windows detected."))
         else:
             for item in items:
                 app_name = item.get("process_name") or item.get("exe_path") or "Unknown app"
@@ -847,7 +766,7 @@ class LayoutsTab(QWidget):
                 remove_btn.setFixedWidth(30)
                 remove_btn.setEnabled(not self._busy)
                 remove_btn.clicked.connect(lambda checked=False, item=item: self._remove_current_app(item))
-                row = _build_context_row(app_name, secondary, meta, trailing=remove_btn)
+                row = build_context_row(app_name, secondary, meta, trailing=remove_btn)
                 self.current_apps_rows.addWidget(row)
                 self._current_row_remove_buttons.append(remove_btn)
         self.show_all_btn.setEnabled(bool(self._removed_current_keys))

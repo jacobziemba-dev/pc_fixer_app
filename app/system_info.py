@@ -1,14 +1,18 @@
 """Backend helpers for live stats, hardware info, startup/programs listing and
-safe disk cleanup scanning. Every function here is read-only except
-`delete_cleanup_items`, which only ever removes files inside the specific
-cache/temp locations returned by `scan_cleanup_targets` -- never arbitrary
-user paths -- and is only called after the user reviews and confirms in the UI.
+safe disk cleanup scanning.
+
+Mutating helpers are intentionally narrow:
+- `delete_cleanup_items` only removes files inside scanned cleanup categories
+- `terminate_process` rejects protected system PIDs/names
+- `set_startup_item_enabled` only toggles allowlisted Run keys / Startup shortcuts
 """
+import hashlib
 import json
 import os
 import subprocess
 import winreg
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import psutil
 import win32api
@@ -420,10 +424,15 @@ _STARTUP_FOLDERS = [
 ]
 
 
+_DISABLED_STARTUP_SUFFIX = ".pcfix-disabled"
+_DISABLED_STARTUP_REG = (winreg.HKEY_CURRENT_USER, r"Software\PC Fix\DisabledStartup")
+
+
 def get_startup_items():
     items = []
     for hive, subkey in _RUN_KEYS:
         hive_name = "HKCU" if hive == winreg.HKEY_CURRENT_USER else "HKLM"
+        source = f"{hive_name}\\...\\Run"
         try:
             with winreg.OpenKey(hive, subkey, 0, winreg.KEY_READ) as key:
                 i = 0
@@ -433,7 +442,11 @@ def get_startup_items():
                         items.append({
                             "name": name,
                             "command": value,
-                            "source": f"{hive_name}\\...\\Run",
+                            "source": source,
+                            "enabled": True,
+                            "kind": "run",
+                            "hive": hive_name,
+                            "subkey": subkey,
                         })
                         i += 1
                     except OSError:
@@ -448,17 +461,216 @@ def get_startup_items():
             continue
         try:
             for fname in os.listdir(folder):
-                if fname.lower() == "desktop.ini":
+                lower = fname.lower()
+                if lower == "desktop.ini":
                     continue
+                enabled = not lower.endswith(_DISABLED_STARTUP_SUFFIX)
+                display_name = fname[: -len(_DISABLED_STARTUP_SUFFIX)] if not enabled else fname
                 items.append({
-                    "name": fname,
+                    "name": display_name,
                     "command": os.path.join(folder, fname),
                     "source": "Startup folder",
+                    "enabled": enabled,
+                    "kind": "folder",
+                    "folder": folder,
+                    "filename": fname,
                 })
         except PermissionError:
             continue
 
+    for disabled in _load_disabled_run_items():
+        items.append(disabled)
+
     return items
+
+
+def _load_disabled_run_items():
+    hive, subkey = _DISABLED_STARTUP_REG
+    items = []
+    try:
+        with winreg.OpenKey(hive, subkey, 0, winreg.KEY_READ) as key:
+            i = 0
+            while True:
+                try:
+                    name, value, _ = winreg.EnumValue(key, i)
+                    payload = json.loads(value) if isinstance(value, str) else {}
+                    items.append({
+                        "name": name,
+                        "command": payload.get("command", ""),
+                        "source": payload.get("source", "HKCU\\...\\Run"),
+                        "enabled": False,
+                        "kind": "run",
+                        "hive": payload.get("hive", "HKCU"),
+                        "subkey": payload.get("subkey", r"Software\Microsoft\Windows\CurrentVersion\Run"),
+                    })
+                    i += 1
+                except OSError:
+                    break
+    except FileNotFoundError:
+        return []
+    except PermissionError:
+        return []
+    return items
+
+
+def set_startup_item_enabled(name, source, enabled, command=""):
+    """Enable or disable one allowlisted startup item. Returns (success, message)."""
+    name = str(name or "").strip()
+    source = str(source or "").strip()
+    if not name or not source:
+        return False, "Startup item name and source are required."
+
+    items = get_startup_items()
+    matches = [
+        item for item in items
+        if item.get("name") == name and item.get("source") == source
+    ]
+    if len(matches) != 1:
+        return False, "Could not uniquely resolve that startup item."
+    item = matches[0]
+    want_enabled = bool(enabled)
+    if bool(item.get("enabled", True)) == want_enabled:
+        state = "enabled" if want_enabled else "disabled"
+        return True, f"Startup item is already {state}."
+
+    if item.get("kind") == "folder":
+        return _set_startup_folder_item_enabled(item, want_enabled)
+    return _set_startup_run_item_enabled(item, want_enabled, command or item.get("command", ""))
+
+
+def _set_startup_folder_item_enabled(item, enabled):
+    folder = item.get("folder") or ""
+    filename = item.get("filename") or ""
+    path = os.path.join(folder, filename)
+    if not folder or not filename or not os.path.exists(path):
+        return False, "Startup shortcut was not found."
+    if not any(os.path.normcase(folder) == os.path.normcase(root) for root in _STARTUP_FOLDERS if root):
+        return False, "Startup folder path is not allowlisted."
+
+    if enabled:
+        if not filename.lower().endswith(_DISABLED_STARTUP_SUFFIX):
+            return False, "Startup shortcut is not disabled."
+        new_name = filename[: -len(_DISABLED_STARTUP_SUFFIX)]
+        new_path = os.path.join(folder, new_name)
+        try:
+            os.rename(path, new_path)
+        except OSError as exc:
+            return False, f"Could not enable startup shortcut: {exc}"
+        return True, f"Enabled startup shortcut {new_name}."
+
+    if filename.lower().endswith(_DISABLED_STARTUP_SUFFIX):
+        return True, "Startup shortcut is already disabled."
+    new_path = path + _DISABLED_STARTUP_SUFFIX
+    try:
+        os.rename(path, new_path)
+    except OSError as exc:
+        return False, f"Could not disable startup shortcut: {exc}"
+    return True, f"Disabled startup shortcut {filename}."
+
+
+def _hive_from_name(hive_name):
+    return winreg.HKEY_CURRENT_USER if hive_name == "HKCU" else winreg.HKEY_LOCAL_MACHINE
+
+
+def _set_startup_run_item_enabled(item, enabled, command):
+    hive_name = item.get("hive", "HKCU")
+    subkey = item.get("subkey", "")
+    name = item.get("name", "")
+    source = item.get("source", "")
+    if ( _hive_from_name(hive_name), subkey) not in _RUN_KEYS:
+        return False, "Startup registry key is not allowlisted."
+
+    hive = _hive_from_name(hive_name)
+    if enabled:
+        if not command:
+            return False, "Missing command for startup item."
+        try:
+            with winreg.CreateKey(hive, subkey) as key:
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, str(command))
+            with winreg.CreateKey(*_DISABLED_STARTUP_REG) as disabled:
+                try:
+                    winreg.DeleteValue(disabled, name)
+                except FileNotFoundError:
+                    pass
+        except OSError as exc:
+            return False, f"Could not enable startup item: {exc}"
+        return True, f"Enabled startup item {name}."
+
+    try:
+        with winreg.OpenKey(hive, subkey, 0, winreg.KEY_READ | winreg.KEY_SET_VALUE) as key:
+            value, _reg_type = winreg.QueryValueEx(key, name)
+            winreg.DeleteValue(key, name)
+        payload = json.dumps({
+            "command": value,
+            "source": source,
+            "hive": hive_name,
+            "subkey": subkey,
+        })
+        with winreg.CreateKey(*_DISABLED_STARTUP_REG) as disabled:
+            winreg.SetValueEx(disabled, name, 0, winreg.REG_SZ, payload)
+    except FileNotFoundError:
+        return False, "Startup registry value was not found."
+    except OSError as exc:
+        return False, f"Could not disable startup item: {exc}"
+    return True, f"Disabled startup item {name}."
+
+
+_PROTECTED_PROCESS_PIDS = {0, 4}
+_PROTECTED_PROCESS_NAMES = {
+    "system",
+    "idle",
+    "smss.exe",
+    "csrss.exe",
+    "wininit.exe",
+    "winlogon.exe",
+    "services.exe",
+    "lsass.exe",
+    "svchost.exe",
+    "fontdrvhost.exe",
+    "dwm.exe",
+    "explorer.exe",
+    "registry",
+    "memory compression",
+}
+
+
+def is_process_termination_allowed(pid, name=""):
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False, "Invalid process id."
+    if pid in _PROTECTED_PROCESS_PIDS or pid < 0:
+        return False, "That process is protected and cannot be ended."
+    process_name = str(name or "").strip().lower()
+    if not process_name:
+        try:
+            process_name = psutil.Process(pid).name().lower()
+        except (psutil.Error, OSError):
+            process_name = ""
+    if process_name in _PROTECTED_PROCESS_NAMES:
+        return False, f"{process_name or 'That process'} is protected and cannot be ended."
+    return True, process_name
+
+
+def terminate_process(pid):
+    """End one user process after denylist checks. Returns (success, message)."""
+    allowed, info = is_process_termination_allowed(pid)
+    if not allowed:
+        return False, info
+    try:
+        proc = psutil.Process(int(pid))
+        name = proc.name()
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except psutil.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3)
+        return True, f"Ended process {name} (PID {pid})."
+    except psutil.NoSuchProcess:
+        return False, "Process is no longer running."
+    except (psutil.Error, OSError) as exc:
+        return False, f"Could not end process: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -727,3 +939,141 @@ def format_bytes(n):
             return f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} PB"
+
+
+# ---------------------------------------------------------------------------
+# Storage diagnostics (read-only)
+# ---------------------------------------------------------------------------
+
+_STORAGE_SKIP_DIR_NAMES = {"venv", ".git", "__pycache__", "node_modules", ".cache"}
+
+
+def default_storage_scan_roots():
+    home = Path.home()
+    candidates = [home / "Downloads", home / "Desktop", home / "Documents", home]
+    roots = []
+    seen = set()
+    for path in candidates:
+        try:
+            resolved = str(path.expanduser().resolve())
+        except OSError:
+            continue
+        key = os.path.normcase(resolved)
+        if key in seen or not os.path.isdir(resolved):
+            continue
+        seen.add(key)
+        roots.append(resolved)
+    return roots
+
+
+def resolve_storage_scan_roots(roots=None):
+    if roots is None:
+        return default_storage_scan_roots()
+    if isinstance(roots, (str, Path)):
+        roots = [roots]
+    resolved = []
+    seen = set()
+    for root in roots:
+        try:
+            path = str(Path(root).expanduser().resolve())
+        except OSError:
+            continue
+        key = os.path.normcase(path)
+        if key in seen or not os.path.isdir(path):
+            continue
+        seen.add(key)
+        resolved.append(path)
+    return resolved
+
+
+def scan_folder_size_breakdown(roots=None, max_entries=40):
+    """Return immediate child folder sizes under the given roots (read-only)."""
+    max_entries = max(1, min(int(max_entries), 100))
+    entries = []
+    for root in resolve_storage_scan_roots(roots):
+        try:
+            names = os.listdir(root)
+        except OSError:
+            continue
+        for name in names:
+            if name in _STORAGE_SKIP_DIR_NAMES:
+                continue
+            path = os.path.join(root, name)
+            if not os.path.isdir(path):
+                continue
+            size, count = _dir_size(path)
+            if size <= 0:
+                continue
+            entries.append({
+                "path": path,
+                "name": name,
+                "root": root,
+                "size_bytes": size,
+                "file_count": count,
+            })
+    entries.sort(key=lambda item: item["size_bytes"], reverse=True)
+    return entries[:max_entries]
+
+
+def _file_content_hash(path, chunk_size=1024 * 1024):
+    digest = hashlib.md5()
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def find_duplicate_files(roots=None, min_size_mb=1, limit_groups=25, max_files=4000):
+    """Group duplicate files by size then content hash (read-only, report only)."""
+    min_size = max(1, int(min_size_mb)) * 1024 * 1024
+    limit_groups = max(1, min(int(limit_groups), 100))
+    max_files = max(100, min(int(max_files), 20000))
+
+    by_size = {}
+    scanned = 0
+    for root in resolve_storage_scan_roots(roots):
+        for current, dirs, files in os.walk(root, topdown=True, onerror=lambda exc: None):
+            dirs[:] = [name for name in dirs if name not in _STORAGE_SKIP_DIR_NAMES]
+            for name in files:
+                if scanned >= max_files:
+                    break
+                path = os.path.join(current, name)
+                try:
+                    size = os.path.getsize(path)
+                except OSError:
+                    continue
+                if size < min_size:
+                    continue
+                scanned += 1
+                by_size.setdefault(size, []).append(path)
+            if scanned >= max_files:
+                break
+        if scanned >= max_files:
+            break
+
+    groups = []
+    for size, paths in by_size.items():
+        if len(paths) < 2:
+            continue
+        by_hash = {}
+        for path in paths:
+            try:
+                digest = _file_content_hash(path)
+            except OSError:
+                continue
+            by_hash.setdefault(digest, []).append(path)
+        for digest, hashed_paths in by_hash.items():
+            if len(hashed_paths) < 2:
+                continue
+            groups.append({
+                "size_bytes": size,
+                "hash": digest,
+                "paths": hashed_paths,
+                "count": len(hashed_paths),
+            })
+
+    groups.sort(key=lambda item: item["size_bytes"] * item["count"], reverse=True)
+    return groups[:limit_groups]

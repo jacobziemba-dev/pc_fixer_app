@@ -73,6 +73,26 @@ This file documents what the PC Fix assistant can request through LLM chat. The 
 | `open_device_manager` | `open_device_manager` | Low | No | Opens Windows Device Manager. |
 | `capture_layout_snapshot` | `capture_layout_snapshot` | Low | Yes | Saves the current window layout for later restore. |
 | `set_default_audio_device` | `set_default_audio_device` | Low | Yes | Sets the default playback device after Python resolves the device from the snapshot. |
+| `clear_app_audio_route` | `clear_app_audio_route` | Low | Yes | Restores one app audio session to the system default playback device after Python resolves the app target. |
+| `delete_saved_layout` | `delete_saved_layout` | Medium | Yes | Deletes one saved window layout after Python resolves the layout by id or name. |
+| `list_saved_layouts` | `list_saved_layouts` | Read-only | No | Lists saved window layout names and ids. |
+| `check_disk_free_space` | `check_disk_free_space` | Read-only | No | Reports free/used space for mounted volumes. |
+| `list_printers` | `list_printers` | Read-only | No | Lists installed printers and default/status signals where available. |
+| `list_usb_devices` | `list_usb_devices` | Read-only | No | Lists present USB devices and status. |
+| `list_running_services` | `list_running_services` | Read-only | No | Lists a capped set of currently running Windows services. |
+| `list_third_party_services` | `list_third_party_services` | Read-only | No | Lists running services whose binaries are outside Windows system folders. |
+| `check_service_status` | `check_service_status` | Read-only | No | Reads status for one allowlisted service key (`spooler`, `wuauserv`, `bits`, `audio`, `dhcp`, `dnscache`, `themes`, `bluetooth`, `defender`, `firewall`, `schedule`). |
+| `list_problem_devices` | `list_problem_devices` | Read-only | No | Lists Plug and Play devices that are not reporting OK status. |
+| `check_listening_ports` | `check_listening_ports` | Read-only | No | Lists top listening endpoints and owning processes. Report only; no firewall changes. |
+| `check_bluetooth_status` | `check_bluetooth_status` | Read-only | No | Reads Bluetooth radio/service status when Windows exposes it. |
+| `check_unexpected_shutdowns` | `check_unexpected_shutdowns` | Read-only | No | Summarizes recent unexpected/dirty shutdown events. |
+| `check_component_store_health` | `check_component_store_health` | Read-only | No | Runs `DISM /Online /Cleanup-Image /CheckHealth` only. Does not restore the image. |
+| `scan_volume_errors` | `scan_volume_errors` | Read-only | No | Runs online `chkdsk /scan` on an allowlisted volume (system drive by default). Does not use `/f` or `/r`. |
+| `restart_print_spooler` | `restart_print_spooler` | Medium | Yes | Restarts only the Windows Print Spooler service. |
+| `start_sfc_scan` | `start_sfc_scan` | Medium | Yes | Runs `sfc /scannow`. Needs elevation and can take several minutes. |
+| `open_services_manager` | `open_services_manager` | Low | No | Opens the Windows Services manager (`services.msc`). |
+| `open_disk_cleanup` | `open_disk_cleanup` | Low | No | Opens the Windows Disk Cleanup UI without deleting anything automatically. |
+| `open_windows_troubleshooter` | `open_windows_troubleshooter` | Low | No | Opens one allowlisted troubleshooter (`internet`, `network_adapter`, `audio`, `printer`, `bluetooth`, `windows_update`). |
 
 ## Skill Request Format
 
@@ -116,3 +136,9 @@ Target-based examples:
 - DNS/ping hosts: allowlisted only (`one.one.one.one`, `1.1.1.1`, `dns.google`, `8.8.8.8`, `cloudflare.com`, `microsoft.com`, `www.microsoft.com`).
 - Restore point options: optional `description`.
 - Layout capture options: optional `name`.
+- Clear audio route targets: `pid`, `process_name`, or `app` (same as other audio session skills).
+- Delete layout targets: `layout_id` or `layout_name` (same as load layout).
+- Service status keys: `spooler`, `wuauserv`, `bits`, `audio`/`audiosrv`, `dhcp`, `dnscache`, `themes`, `bluetooth`/`bthserv`, `defender`, `firewall`, `schedule`.
+- Troubleshooter keys: `internet`, `network_adapter`, `audio`, `printer`, `bluetooth`, `windows_update`.
+- Unexpected shutdown options: optional `hours` (1–168, default 72).
+- Volume scan options: optional drive letter `volume` such as `C` or `C:`; defaults to the system drive.

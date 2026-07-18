@@ -586,6 +586,150 @@ ASSISTANT_TOOLS = {
         confirm_label="Set Default",
         keywords=("default speaker", "default audio", "default sound"),
     ),
+    "clear_app_audio_route": AssistantTool(
+        "clear_app_audio_route",
+        "Clear app audio route",
+        "Restore one app audio session to the system default playback device.",
+        risk=LOW_RISK,
+        requires_confirmation=True,
+        payload_schema={"pid": "int", "process_name": "str?"},
+        confirm_label="Clear Route",
+        keywords=("clear audio route", "system default audio", "reset app audio"),
+    ),
+    "delete_saved_layout": AssistantTool(
+        "delete_saved_layout",
+        "Delete saved layout",
+        "Delete one saved window layout after Python resolves the layout target.",
+        risk=MEDIUM_RISK,
+        requires_confirmation=True,
+        payload_schema={"layout_id": "str"},
+        confirm_label="Delete",
+        keywords=("delete layout", "remove layout"),
+    ),
+    "list_saved_layouts": AssistantTool(
+        "list_saved_layouts",
+        "List saved layouts",
+        "List saved window layout names and ids.",
+        keywords=("saved layouts", "list layouts"),
+    ),
+    "check_disk_free_space": AssistantTool(
+        "check_disk_free_space",
+        "Check disk free space",
+        "Report free and used space for mounted volumes.",
+        keywords=("free space", "disk space", "storage space"),
+    ),
+    "list_printers": AssistantTool(
+        "list_printers",
+        "List printers",
+        "List installed printers and default/online status where available.",
+        keywords=("printers", "printer"),
+    ),
+    "list_usb_devices": AssistantTool(
+        "list_usb_devices",
+        "List USB devices",
+        "List present USB devices and their status.",
+        keywords=("usb", "usb devices"),
+    ),
+    "list_running_services": AssistantTool(
+        "list_running_services",
+        "List running services",
+        "List a capped set of currently running Windows services.",
+        keywords=("services", "running services"),
+    ),
+    "list_third_party_services": AssistantTool(
+        "list_third_party_services",
+        "List third-party services",
+        "List running services whose binaries are outside Windows system folders.",
+        keywords=("third party services", "non microsoft services"),
+    ),
+    "check_service_status": AssistantTool(
+        "check_service_status",
+        "Check service status",
+        "Read status for one allowlisted Windows service key.",
+        payload_schema={"service": "str"},
+        keywords=("service status", "spooler status"),
+    ),
+    "list_problem_devices": AssistantTool(
+        "list_problem_devices",
+        "List problem devices",
+        "List Plug and Play devices that are not reporting OK status.",
+        keywords=("problem devices", "device errors", "yellow bang"),
+    ),
+    "check_listening_ports": AssistantTool(
+        "check_listening_ports",
+        "Check listening ports",
+        "List top listening TCP/UDP endpoints and owning processes (report only).",
+        keywords=("listening ports", "open ports", "ports"),
+    ),
+    "check_bluetooth_status": AssistantTool(
+        "check_bluetooth_status",
+        "Check Bluetooth status",
+        "Read Bluetooth radio and service status when Windows exposes it.",
+        keywords=("bluetooth", "bt status"),
+    ),
+    "check_unexpected_shutdowns": AssistantTool(
+        "check_unexpected_shutdowns",
+        "Check unexpected shutdowns",
+        "Summarize recent unexpected or dirty shutdown events.",
+        payload_schema={"hours": "int?"},
+        keywords=("unexpected shutdown", "crash reboot", "dirty shutdown"),
+    ),
+    "check_component_store_health": AssistantTool(
+        "check_component_store_health",
+        "Check component store health",
+        "Run DISM CheckHealth only (read-only; does not restore the image).",
+        keywords=("dism", "component store", "checkhealth"),
+    ),
+    "scan_volume_errors": AssistantTool(
+        "scan_volume_errors",
+        "Scan volume errors",
+        "Run an online read-only chkdsk /scan on an allowlisted volume.",
+        payload_schema={"volume": "str?"},
+        keywords=("chkdsk", "disk errors", "volume scan"),
+    ),
+    "restart_print_spooler": AssistantTool(
+        "restart_print_spooler",
+        "Restart print spooler",
+        "Restart only the Windows Print Spooler service.",
+        risk=MEDIUM_RISK,
+        requires_confirmation=True,
+        confirm_label="Restart Spooler",
+        keywords=("print spooler", "printer spooler", "restart spooler"),
+    ),
+    "start_sfc_scan": AssistantTool(
+        "start_sfc_scan",
+        "Start SFC scan",
+        "Run sfc /scannow. Needs elevation and can take several minutes.",
+        risk=MEDIUM_RISK,
+        requires_confirmation=True,
+        confirm_label="Run SFC",
+        keywords=("sfc", "system file checker", "scannow"),
+    ),
+    "open_services_manager": AssistantTool(
+        "open_services_manager",
+        "Open Services",
+        "Launch the Windows Services manager.",
+        risk=LOW_RISK,
+        confirm_label="Open",
+        keywords=("services.msc", "open services"),
+    ),
+    "open_disk_cleanup": AssistantTool(
+        "open_disk_cleanup",
+        "Open Disk Cleanup",
+        "Launch the Windows Disk Cleanup UI without deleting anything automatically.",
+        risk=LOW_RISK,
+        confirm_label="Open",
+        keywords=("disk cleanup", "cleanmgr"),
+    ),
+    "open_windows_troubleshooter": AssistantTool(
+        "open_windows_troubleshooter",
+        "Open Windows troubleshooter",
+        "Open one allowlisted built-in Windows troubleshooter.",
+        risk=LOW_RISK,
+        payload_schema={"troubleshooter": "str"},
+        confirm_label="Open",
+        keywords=("troubleshooter", "troubleshoot"),
+    ),
 }
 
 ASSISTANT_SKILLS = {
@@ -1073,6 +1217,166 @@ ASSISTANT_SKILLS = {
         ASSISTANT_TOOLS["set_default_audio_device"].requires_confirmation,
         "set_default_audio_device",
     ),
+    "clear_app_audio_route": AssistantSkill(
+        "clear_app_audio_route",
+        "Restore one app audio session to the system default device.",
+        {"pid": "int?", "process_name": "str?", "app": "str?"},
+        ASSISTANT_TOOLS["clear_app_audio_route"].risk,
+        ASSISTANT_TOOLS["clear_app_audio_route"].requires_confirmation,
+        "clear_app_audio_route",
+    ),
+    "delete_saved_layout": AssistantSkill(
+        "delete_saved_layout",
+        "Delete one saved window layout after Python resolves the layout target.",
+        {"layout_id": "str?", "layout_name": "str?"},
+        ASSISTANT_TOOLS["delete_saved_layout"].risk,
+        ASSISTANT_TOOLS["delete_saved_layout"].requires_confirmation,
+        "delete_saved_layout",
+    ),
+    "list_saved_layouts": AssistantSkill(
+        "list_saved_layouts",
+        "List saved window layout names and ids.",
+        {},
+        ASSISTANT_TOOLS["list_saved_layouts"].risk,
+        ASSISTANT_TOOLS["list_saved_layouts"].requires_confirmation,
+        "list_saved_layouts",
+    ),
+    "check_disk_free_space": AssistantSkill(
+        "check_disk_free_space",
+        "Report free and used space for mounted volumes.",
+        {},
+        ASSISTANT_TOOLS["check_disk_free_space"].risk,
+        ASSISTANT_TOOLS["check_disk_free_space"].requires_confirmation,
+        "check_disk_free_space",
+    ),
+    "list_printers": AssistantSkill(
+        "list_printers",
+        "List installed printers and status.",
+        {},
+        ASSISTANT_TOOLS["list_printers"].risk,
+        ASSISTANT_TOOLS["list_printers"].requires_confirmation,
+        "list_printers",
+    ),
+    "list_usb_devices": AssistantSkill(
+        "list_usb_devices",
+        "List present USB devices.",
+        {},
+        ASSISTANT_TOOLS["list_usb_devices"].risk,
+        ASSISTANT_TOOLS["list_usb_devices"].requires_confirmation,
+        "list_usb_devices",
+    ),
+    "list_running_services": AssistantSkill(
+        "list_running_services",
+        "List currently running Windows services (capped).",
+        {},
+        ASSISTANT_TOOLS["list_running_services"].risk,
+        ASSISTANT_TOOLS["list_running_services"].requires_confirmation,
+        "list_running_services",
+    ),
+    "list_third_party_services": AssistantSkill(
+        "list_third_party_services",
+        "List running third-party services outside Windows system folders.",
+        {},
+        ASSISTANT_TOOLS["list_third_party_services"].risk,
+        ASSISTANT_TOOLS["list_third_party_services"].requires_confirmation,
+        "list_third_party_services",
+    ),
+    "check_service_status": AssistantSkill(
+        "check_service_status",
+        "Check status of one allowlisted Windows service key.",
+        {"service": "str"},
+        ASSISTANT_TOOLS["check_service_status"].risk,
+        ASSISTANT_TOOLS["check_service_status"].requires_confirmation,
+        "check_service_status",
+    ),
+    "list_problem_devices": AssistantSkill(
+        "list_problem_devices",
+        "List devices that are not reporting OK status.",
+        {},
+        ASSISTANT_TOOLS["list_problem_devices"].risk,
+        ASSISTANT_TOOLS["list_problem_devices"].requires_confirmation,
+        "list_problem_devices",
+    ),
+    "check_listening_ports": AssistantSkill(
+        "check_listening_ports",
+        "List listening ports and owning processes (report only).",
+        {},
+        ASSISTANT_TOOLS["check_listening_ports"].risk,
+        ASSISTANT_TOOLS["check_listening_ports"].requires_confirmation,
+        "check_listening_ports",
+    ),
+    "check_bluetooth_status": AssistantSkill(
+        "check_bluetooth_status",
+        "Read Bluetooth adapter and service status.",
+        {},
+        ASSISTANT_TOOLS["check_bluetooth_status"].risk,
+        ASSISTANT_TOOLS["check_bluetooth_status"].requires_confirmation,
+        "check_bluetooth_status",
+    ),
+    "check_unexpected_shutdowns": AssistantSkill(
+        "check_unexpected_shutdowns",
+        "Summarize recent unexpected shutdown events.",
+        {"hours": "int?"},
+        ASSISTANT_TOOLS["check_unexpected_shutdowns"].risk,
+        ASSISTANT_TOOLS["check_unexpected_shutdowns"].requires_confirmation,
+        "check_unexpected_shutdowns",
+    ),
+    "check_component_store_health": AssistantSkill(
+        "check_component_store_health",
+        "Run DISM CheckHealth only (does not restore the image).",
+        {},
+        ASSISTANT_TOOLS["check_component_store_health"].risk,
+        ASSISTANT_TOOLS["check_component_store_health"].requires_confirmation,
+        "check_component_store_health",
+    ),
+    "scan_volume_errors": AssistantSkill(
+        "scan_volume_errors",
+        "Run read-only chkdsk /scan on an allowlisted volume.",
+        {"volume": "str?"},
+        ASSISTANT_TOOLS["scan_volume_errors"].risk,
+        ASSISTANT_TOOLS["scan_volume_errors"].requires_confirmation,
+        "scan_volume_errors",
+    ),
+    "restart_print_spooler": AssistantSkill(
+        "restart_print_spooler",
+        "Restart the Windows Print Spooler service.",
+        {},
+        ASSISTANT_TOOLS["restart_print_spooler"].risk,
+        ASSISTANT_TOOLS["restart_print_spooler"].requires_confirmation,
+        "restart_print_spooler",
+    ),
+    "start_sfc_scan": AssistantSkill(
+        "start_sfc_scan",
+        "Run sfc /scannow (needs elevation; may take several minutes).",
+        {},
+        ASSISTANT_TOOLS["start_sfc_scan"].risk,
+        ASSISTANT_TOOLS["start_sfc_scan"].requires_confirmation,
+        "start_sfc_scan",
+    ),
+    "open_services_manager": AssistantSkill(
+        "open_services_manager",
+        "Open the Windows Services manager.",
+        {},
+        ASSISTANT_TOOLS["open_services_manager"].risk,
+        ASSISTANT_TOOLS["open_services_manager"].requires_confirmation,
+        "open_services_manager",
+    ),
+    "open_disk_cleanup": AssistantSkill(
+        "open_disk_cleanup",
+        "Open the Windows Disk Cleanup UI.",
+        {},
+        ASSISTANT_TOOLS["open_disk_cleanup"].risk,
+        ASSISTANT_TOOLS["open_disk_cleanup"].requires_confirmation,
+        "open_disk_cleanup",
+    ),
+    "open_windows_troubleshooter": AssistantSkill(
+        "open_windows_troubleshooter",
+        "Open one allowlisted Windows troubleshooter.",
+        {"troubleshooter": "str"},
+        ASSISTANT_TOOLS["open_windows_troubleshooter"].risk,
+        ASSISTANT_TOOLS["open_windows_troubleshooter"].requires_confirmation,
+        "open_windows_troubleshooter",
+    ),
 }
 
 TAB_ACTION_KINDS = {
@@ -1097,6 +1401,7 @@ SKILL_DOMAIN_KEYWORDS = {
     "network": (
         "network", "internet", "wifi", "wi-fi", "ethernet", "dns", "adapter",
         "ip", "winsock", "ping", "gateway", "offline", "connection",
+        "ports", "listening",
     ),
     "display": ("display", "monitor", "refresh rate", "screen", "hz", "resolution"),
     "audio": ("audio", "sound", "speaker", "volume", "mute", "route", "headphones"),
@@ -1104,16 +1409,23 @@ SKILL_DOMAIN_KEYWORDS = {
     "startup": ("startup", "boot", "launch on start", "startup apps", "startup programs"),
     "storage": (
         "storage", "disk", "drive", "large file", "large files", "duplicate",
-        "folder size", "downloads", "desktop files", "space",
+        "folder size", "downloads", "desktop files", "space", "chkdsk", "free space",
     ),
-    "cleanup": ("clean", "cleanup", "junk", "temp", "cache", "recycle", "free space"),
+    "cleanup": ("clean", "cleanup", "junk", "temp", "cache", "recycle", "free space", "disk cleanup"),
     "power": ("power", "battery", "power plan", "performance plan", "power saver"),
-    "security": ("security", "defender", "firewall", "update", "updates", "event log", "errors"),
-    "hardware": ("hardware", "gpu", "cpu", "bios", "motherboard", "specs", "uptime", "memory pressure"),
+    "security": (
+        "security", "defender", "firewall", "update", "updates", "event log", "errors",
+        "sfc", "dism", "shutdown", "unexpected",
+    ),
+    "hardware": (
+        "hardware", "gpu", "cpu", "bios", "motherboard", "specs", "uptime",
+        "memory pressure", "usb", "bluetooth",
+    ),
     "process": ("process", "processes", "task manager", "end process", "kill", "cpu hog"),
     "system": (
         "settings", "task manager", "resource monitor", "device manager",
-        "explorer", "restore point", "open folder",
+        "explorer", "restore point", "open folder", "printer", "spooler",
+        "services", "troubleshoot", "troubleshooter",
     ),
 }
 
@@ -1178,6 +1490,26 @@ SKILL_DOMAINS = {
     "open_device_manager": ("system", "hardware"),
     "capture_layout_snapshot": ("layouts",),
     "set_default_audio_device": ("audio",),
+    "clear_app_audio_route": ("audio",),
+    "delete_saved_layout": ("layouts",),
+    "list_saved_layouts": ("layouts",),
+    "check_disk_free_space": ("storage",),
+    "list_printers": ("system",),
+    "list_usb_devices": ("hardware",),
+    "list_running_services": ("system",),
+    "list_third_party_services": ("system",),
+    "check_service_status": ("system",),
+    "list_problem_devices": ("hardware",),
+    "check_listening_ports": ("network",),
+    "check_bluetooth_status": ("hardware",),
+    "check_unexpected_shutdowns": ("system", "security"),
+    "check_component_store_health": ("system", "security"),
+    "scan_volume_errors": ("storage",),
+    "restart_print_spooler": ("system",),
+    "start_sfc_scan": ("system", "security"),
+    "open_services_manager": ("system",),
+    "open_disk_cleanup": ("system", "cleanup"),
+    "open_windows_troubleshooter": ("system",),
 }
 
 FULL_CATALOG_PROMPTS = (
@@ -1191,6 +1523,22 @@ FULL_CATALOG_PROMPTS = (
 )
 
 
+_KEYWORD_PATTERNS = {}
+
+
+def _keyword_pattern(keyword):
+    """Word-boundary pattern with optional plural, so "ip" stops matching "tips"."""
+    pattern = _KEYWORD_PATTERNS.get(keyword)
+    if pattern is None:
+        if keyword == "hz":
+            # "hz" usually rides on a number ("144hz") with no word boundary.
+            pattern = re.compile(r"\bhz\b|\dhz\b")
+        else:
+            pattern = re.compile(rf"\b{re.escape(keyword)}(?:es|s)?\b")
+        _KEYWORD_PATTERNS[keyword] = pattern
+    return pattern
+
+
 def detect_skill_domains(user_text):
     lowered = (user_text or "").lower()
     if not lowered.strip():
@@ -1199,7 +1547,7 @@ def detect_skill_domains(user_text):
         return {"*"}
     domains = set()
     for domain, keywords in SKILL_DOMAIN_KEYWORDS.items():
-        if any(keyword in lowered for keyword in keywords):
+        if any(_keyword_pattern(keyword).search(lowered) for keyword in keywords):
             domains.add(domain)
     return domains
 
@@ -2016,7 +2364,12 @@ def skill_request_to_action(request, snapshot=None):
             payload={"device_name": display["name"], "hz": hz},
         ), ""
 
-    if kind in {"audio_set_volume", "audio_mute_session", "audio_route_session"}:
+    if kind in {
+        "audio_set_volume",
+        "audio_mute_session",
+        "audio_route_session",
+        "clear_app_audio_route",
+    }:
         session, message = _resolve_audio_session(args, snapshot)
         if not session:
             return None, message
@@ -2029,6 +2382,9 @@ def skill_request_to_action(request, snapshot=None):
             muted = bool(args["muted"])
             payload["muted"] = muted
             description = f"{'Mute' if muted else 'Unmute'} {session['display_name']}."
+        elif kind == "clear_app_audio_route":
+            payload["process_name"] = session.get("process_name", "")
+            description = f"Restore {session['display_name']} to the system default audio device."
         else:
             device, message = _resolve_audio_device(args, snapshot)
             if not device:
@@ -2040,13 +2396,14 @@ def skill_request_to_action(request, snapshot=None):
             description = f"Route {session['display_name']} to {device['name']}."
         return _action(kind, description=description, payload=payload), ""
 
-    if kind == "load_saved_layout":
+    if kind in {"load_saved_layout", "delete_saved_layout"}:
         layout, message = _resolve_layout(args, snapshot)
         if not layout:
             return None, message
+        verb = "Load" if kind == "load_saved_layout" else "Delete"
         return _action(
             kind,
-            description=f"Load saved layout \"{layout['name']}\".",
+            description=f"{verb} saved layout \"{layout['name']}\".",
             payload={"layout_id": layout["id"]},
         ), ""
 
@@ -2244,8 +2601,57 @@ def skill_request_to_action(request, snapshot=None):
         "open_task_manager",
         "open_resource_monitor",
         "open_device_manager",
+        "open_services_manager",
+        "open_disk_cleanup",
     }:
         return _action(kind, payload={"tool": kind.replace("open_", "")}), ""
+
+    if kind == "check_service_status":
+        service = str(args.get("service", "")).strip().lower()
+        if service not in toolbox.SERVICE_STATUS_KEYS:
+            return None, (
+                "Service key is not on the allowlist. Allowed keys: "
+                f"{', '.join(sorted(set(toolbox.SERVICE_STATUS_KEYS)))}."
+            )
+        return _action(
+            kind,
+            description=f"Check status of service key \"{service}\".",
+            payload={"service": service},
+        ), ""
+
+    if kind == "open_windows_troubleshooter":
+        key = str(args.get("troubleshooter", "")).strip().lower()
+        if key not in toolbox.TROUBLESHOOTER_KEYS:
+            return None, (
+                "Troubleshooter must be internet, network_adapter, audio, printer, "
+                "bluetooth, or windows_update."
+            )
+        label = toolbox.TROUBLESHOOTER_KEYS[key][1]
+        return _action(
+            kind,
+            description=f"Open the {label} troubleshooter.",
+            payload={"troubleshooter": key},
+        ), ""
+
+    if kind == "check_unexpected_shutdowns":
+        hours = int(args.get("hours", 72))
+        hours = max(1, min(hours, 168))
+        return _action(
+            kind,
+            description=f"Check unexpected shutdowns from the last {hours} hour(s).",
+            payload={"hours": hours},
+        ), ""
+
+    if kind == "scan_volume_errors":
+        volume = str(args.get("volume") or "").strip()
+        payload = {}
+        if volume:
+            payload["volume"] = volume
+        return _action(
+            kind,
+            description="Run a read-only online volume error scan.",
+            payload=payload,
+        ), ""
 
     if kind == "create_restore_point":
         description = str(args.get("description") or "PC Fix restore point")
@@ -2469,7 +2875,7 @@ def _resolve_audio_device(args, snapshot):
 def _resolve_layout(args, snapshot):
     layouts = getattr(snapshot, "saved_layouts", []) if snapshot else []
     if not layouts:
-        return None, "Refresh layouts before loading a saved layout."
+        return None, "Refresh layouts before targeting a saved layout."
     if args.get("layout_id"):
         matches = [layout for layout in layouts if layout.get("id") == args["layout_id"]]
     elif args.get("layout_name"):
@@ -2541,12 +2947,17 @@ def execute_assistant_action(action, snapshot=None):
         refreshed = collect_assistant_snapshot(include_cleanup=False) if result.success else snapshot
         return AssistantActionResult(result.success, result.message), refreshed
 
-    if kind in {"audio_set_volume", "audio_mute_session", "audio_route_session"}:
+    if kind in {
+        "audio_set_volume",
+        "audio_mute_session",
+        "audio_route_session",
+        "clear_app_audio_route",
+    }:
         result = _execute_audio_action(action)
         refreshed = collect_assistant_snapshot(include_cleanup=False) if result.success else snapshot
         return result, refreshed
 
-    if kind == "load_saved_layout":
+    if kind in {"load_saved_layout", "delete_saved_layout"}:
         result = _execute_layout_action(action, snapshot)
         refreshed = collect_assistant_snapshot(include_cleanup=False) if result.success else snapshot
         return result, refreshed
@@ -2653,10 +3064,46 @@ def _execute_toolbox_action(action):
         return toolbox.open_system_tool("resource_monitor")
     if kind == "open_device_manager":
         return toolbox.open_system_tool("device_manager")
+    if kind == "open_services_manager":
+        return toolbox.open_system_tool("services")
+    if kind == "open_disk_cleanup":
+        return toolbox.open_system_tool("disk_cleanup")
     if kind == "capture_layout_snapshot":
         return toolbox.capture_window_layout(payload.get("name", "Assistant Layout"))
     if kind == "set_default_audio_device":
         return toolbox.set_default_audio_device(payload.get("device_id", ""))
+    if kind == "list_saved_layouts":
+        return toolbox.list_saved_layouts()
+    if kind == "check_disk_free_space":
+        return toolbox.check_disk_free_space()
+    if kind == "list_printers":
+        return toolbox.list_printers()
+    if kind == "list_usb_devices":
+        return toolbox.list_usb_devices()
+    if kind == "list_running_services":
+        return toolbox.list_running_services()
+    if kind == "list_third_party_services":
+        return toolbox.list_third_party_services()
+    if kind == "check_service_status":
+        return toolbox.check_service_status(payload.get("service", ""))
+    if kind == "list_problem_devices":
+        return toolbox.list_problem_devices()
+    if kind == "check_listening_ports":
+        return toolbox.check_listening_ports()
+    if kind == "check_bluetooth_status":
+        return toolbox.check_bluetooth_status()
+    if kind == "check_unexpected_shutdowns":
+        return toolbox.check_unexpected_shutdowns(hours=payload.get("hours", 72))
+    if kind == "check_component_store_health":
+        return toolbox.check_component_store_health()
+    if kind == "scan_volume_errors":
+        return toolbox.scan_volume_errors(volume=payload.get("volume"))
+    if kind == "restart_print_spooler":
+        return toolbox.restart_print_spooler()
+    if kind == "start_sfc_scan":
+        return toolbox.start_sfc_scan()
+    if kind == "open_windows_troubleshooter":
+        return toolbox.open_windows_troubleshooter(payload.get("troubleshooter", ""))
     return None
 
 
@@ -2689,6 +3136,14 @@ def _execute_audio_action(action):
         )
         return AssistantActionResult(route.success, route.message)
 
+    if action.kind == "clear_app_audio_route":
+        process_name = action.payload.get("process_name", "")
+        route = audio_control.clear_app_output_device(
+            process_id=pid,
+            process_name=process_name or None,
+        )
+        return AssistantActionResult(route.success, route.message)
+
     return AssistantActionResult(False, f"Unsupported audio action: {action.kind}")
 
 
@@ -2703,6 +3158,11 @@ def _execute_layout_action(action, snapshot):
         layout = next((item for item in layouts if item.get("name") == layout_name), None)
     if not layout:
         return AssistantActionResult(False, "No saved layout was selected.")
+
+    if action.kind == "delete_saved_layout":
+        result = toolbox.delete_saved_layout(layout.get("id", ""))
+        return AssistantActionResult(result.success, result.summary, result.errors)
+
     result = window_layouts.apply_layout(layout, launch_missing=True)
     parts = [f"Moved {result.moved} window(s)"]
     if result.launched:

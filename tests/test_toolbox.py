@@ -164,6 +164,104 @@ def test_reset_winsock_uses_fixed_netsh_command(monkeypatch):
     assert any("reboot" in line.lower() for line in result.details)
 
 
+def test_open_system_tool_rejects_unknown_key(monkeypatch):
+    monkeypatch.setattr(toolbox, "is_windows", lambda: True)
+
+    result = toolbox.open_system_tool("regedit")
+
+    assert result.success is False
+    assert "Unsupported" in result.summary
+
+
+def test_open_system_tool_allows_services_and_disk_cleanup(monkeypatch):
+    monkeypatch.setattr(toolbox, "is_windows", lambda: True)
+    started = []
+
+    def fake_startfile(path):
+        started.append(path)
+
+    monkeypatch.setattr(toolbox.os, "startfile", fake_startfile)
+    monkeypatch.setattr(toolbox, "_run_command", lambda args, timeout=10: (0, "", ""))
+
+    services = toolbox.open_system_tool("services")
+    cleanup = toolbox.open_system_tool("disk_cleanup")
+
+    assert services.success is True
+    assert cleanup.success is True
+    assert "services.msc" in started
+
+
+def test_check_service_status_rejects_unknown_key(monkeypatch):
+    monkeypatch.setattr(toolbox, "is_windows", lambda: True)
+
+    result = toolbox.check_service_status("not_a_real_service")
+
+    assert result.success is False
+    assert "allowlist" in result.summary.lower()
+
+
+def test_open_windows_troubleshooter_rejects_unknown_key(monkeypatch):
+    monkeypatch.setattr(toolbox, "is_windows", lambda: True)
+
+    result = toolbox.open_windows_troubleshooter("everything")
+
+    assert result.success is False
+    assert "allowlist" in result.summary.lower()
+
+
+def test_check_component_store_health_uses_fixed_dism(monkeypatch):
+    calls = []
+
+    def fake_run(args, timeout=30):
+        calls.append(args)
+        return 0, "No component store corruption detected.", ""
+
+    monkeypatch.setattr(toolbox, "is_windows", lambda: True)
+    monkeypatch.setattr(toolbox, "_run_command", fake_run)
+
+    result = toolbox.check_component_store_health()
+
+    assert result.success is True
+    assert calls == [["DISM.exe", "/Online", "/Cleanup-Image", "/CheckHealth"]]
+
+
+def test_scan_volume_errors_uses_scan_only(monkeypatch):
+    calls = []
+
+    def fake_run(args, timeout=30):
+        calls.append(args)
+        return 0, "Windows has scanned the file system and found no problems.", ""
+
+    monkeypatch.setattr(toolbox, "is_windows", lambda: True)
+    monkeypatch.setattr(toolbox, "_run_command", fake_run)
+    monkeypatch.setattr(
+        toolbox.sysinfo,
+        "get_disk_usage",
+        lambda: [{"mountpoint": "C:\\", "total": 1, "used": 1, "free": 1, "percent": 50}],
+    )
+
+    result = toolbox.scan_volume_errors("C")
+
+    assert result.success is True
+    assert calls == [["chkdsk.exe", "C:", "/scan"]]
+
+
+def test_restart_print_spooler_uses_fixed_service(monkeypatch):
+    calls = []
+
+    def fake_ps(command, timeout=30):
+        calls.append(command)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(toolbox, "is_windows", lambda: True)
+    monkeypatch.setattr(toolbox, "_run_powershell", fake_ps)
+
+    result = toolbox.restart_print_spooler()
+
+    assert result.success is True
+    assert "Restart-Service -Name Spooler" in calls[0]
+
+
 def test_tool_history_records_result():
     tool_history.clear()
     result = toolbox.ToolResult(True, "Check", "All good", ["detail"])

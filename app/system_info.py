@@ -1077,3 +1077,228 @@ def find_duplicate_files(roots=None, min_size_mb=1, limit_groups=25, max_files=4
 
     groups.sort(key=lambda item: item["size_bytes"] * item["count"], reverse=True)
     return groups[:limit_groups]
+
+
+# ---------------------------------------------------------------------------
+# Read-only diagnostics used by toolbox / assistant skills
+# ---------------------------------------------------------------------------
+
+def _parse_json_powershell(command, timeout=30):
+    output = _run_powershell_command_capture(command, timeout=timeout)
+    if not output or not str(output).strip():
+        return None
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError:
+        return None
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def list_printers():
+    data = _parse_json_powershell(
+        "Get-Printer -ErrorAction SilentlyContinue | "
+        "Select-Object Name,PrinterStatus,Type,PortName,Default | "
+        "ConvertTo-Json -Compress",
+        timeout=20,
+    )
+    printers = []
+    for item in _as_list(data):
+        if not isinstance(item, dict):
+            continue
+        printers.append({
+            "name": str(item.get("Name") or ""),
+            "status": str(item.get("PrinterStatus") or ""),
+            "type": str(item.get("Type") or ""),
+            "port": str(item.get("PortName") or ""),
+            "is_default": bool(item.get("Default")),
+        })
+    return printers
+
+
+def list_usb_devices(limit=40):
+    data = _parse_json_powershell(
+        "Get-PnpDevice -PresentOnly -Class USB,USBDevice,HIDClass -ErrorAction SilentlyContinue | "
+        "Select-Object -First %d FriendlyName,Status,InstanceId,Class | "
+        "ConvertTo-Json -Compress" % max(1, min(int(limit), 100)),
+        timeout=25,
+    )
+    devices = []
+    for item in _as_list(data):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("FriendlyName") or item.get("InstanceId") or ""
+        devices.append({
+            "name": str(name),
+            "status": str(item.get("Status") or ""),
+            "class": str(item.get("Class") or ""),
+            "instance_id": str(item.get("InstanceId") or ""),
+        })
+    return devices
+
+
+def list_windows_services(running_only=True, limit=50, third_party_only=False):
+    filter_parts = []
+    if running_only:
+        filter_parts.append("$_.State -eq 'Running'")
+    if third_party_only:
+        filter_parts.append(
+            "$_.PathName -and ($_.PathName -notmatch '\\\\Windows\\\\(System32|SysWOW64)\\\\')"
+        )
+    where = " | Where-Object { %s }" % " -and ".join(filter_parts) if filter_parts else ""
+    data = _parse_json_powershell(
+        "Get-CimInstance Win32_Service -ErrorAction SilentlyContinue"
+        f"{where} | Select-Object -First {max(1, min(int(limit), 100))} "
+        "Name,DisplayName,State,StartMode,PathName | ConvertTo-Json -Compress",
+        timeout=30,
+    )
+    services = []
+    for item in _as_list(data):
+        if not isinstance(item, dict):
+            continue
+        services.append({
+            "name": str(item.get("Name") or ""),
+            "display_name": str(item.get("DisplayName") or ""),
+            "state": str(item.get("State") or ""),
+            "start_mode": str(item.get("StartMode") or ""),
+            "path": str(item.get("PathName") or ""),
+        })
+    return services
+
+
+def get_service_status(service_name):
+    safe = str(service_name or "").replace("'", "''").strip()
+    if not safe:
+        return None
+    data = _parse_json_powershell(
+        f"Get-Service -Name '{safe}' -ErrorAction SilentlyContinue | "
+        "Select-Object Name,DisplayName,Status,StartType | ConvertTo-Json -Compress",
+        timeout=15,
+    )
+    if isinstance(data, list):
+        data = data[0] if data else None
+    if not isinstance(data, dict):
+        return None
+    return {
+        "name": str(data.get("Name") or ""),
+        "display_name": str(data.get("DisplayName") or ""),
+        "status": str(data.get("Status") or ""),
+        "start_type": str(data.get("StartType") or ""),
+    }
+
+
+def list_problem_devices(limit=40):
+    data = _parse_json_powershell(
+        "Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.Status -ne 'OK' } | "
+        "Select-Object -First %d FriendlyName,Status,InstanceId,Class,Problem | "
+        "ConvertTo-Json -Compress" % max(1, min(int(limit), 100)),
+        timeout=30,
+    )
+    devices = []
+    for item in _as_list(data):
+        if not isinstance(item, dict):
+            continue
+        devices.append({
+            "name": str(item.get("FriendlyName") or item.get("InstanceId") or ""),
+            "status": str(item.get("Status") or ""),
+            "class": str(item.get("Class") or ""),
+            "problem": str(item.get("Problem") or ""),
+            "instance_id": str(item.get("InstanceId") or ""),
+        })
+    return devices
+
+
+def list_listening_ports(limit=25):
+    connections = []
+    try:
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.status != psutil.CONN_LISTEN:
+                continue
+            if not conn.laddr:
+                continue
+            pid = int(conn.pid or 0)
+            name = ""
+            if pid:
+                try:
+                    name = psutil.Process(pid).name()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    name = ""
+            connections.append({
+                "address": f"{conn.laddr.ip}:{conn.laddr.port}",
+                "port": int(conn.laddr.port),
+                "pid": pid,
+                "process": name,
+                "family": "tcp" if conn.type == 1 else "udp",
+            })
+    except (psutil.AccessDenied, PermissionError, OSError):
+        return []
+    connections.sort(key=lambda item: item["port"])
+    return connections[: max(1, min(int(limit), 100))]
+
+
+def get_bluetooth_status():
+    data = _parse_json_powershell(
+        "$radios = Get-PnpDevice -Class Bluetooth -PresentOnly -ErrorAction SilentlyContinue | "
+        "Select-Object FriendlyName,Status,InstanceId; "
+        "$svc = Get-Service -Name bthserv -ErrorAction SilentlyContinue | "
+        "Select-Object Status,StartType; "
+        "[pscustomobject]@{"
+        "Radios=@($radios);"
+        "ServiceStatus=$svc.Status;"
+        "ServiceStartType=$svc.StartType"
+        "} | ConvertTo-Json -Compress -Depth 4",
+        timeout=20,
+    )
+    if not isinstance(data, dict):
+        return {
+            "service_status": "",
+            "service_start_type": "",
+            "radios": [],
+            "present": False,
+        }
+    radios = []
+    for item in _as_list(data.get("Radios")):
+        if not isinstance(item, dict):
+            continue
+        radios.append({
+            "name": str(item.get("FriendlyName") or ""),
+            "status": str(item.get("Status") or ""),
+            "instance_id": str(item.get("InstanceId") or ""),
+        })
+    return {
+        "service_status": str(data.get("ServiceStatus") or ""),
+        "service_start_type": str(data.get("ServiceStartType") or ""),
+        "radios": radios,
+        "present": bool(radios) or bool(data.get("ServiceStatus")),
+    }
+
+
+def get_unexpected_shutdowns(hours=72, limit=20):
+    hours = max(1, min(int(hours), 168))
+    limit = max(1, min(int(limit), 50))
+    data = _parse_json_powershell(
+        f"$start = (Get-Date).AddHours(-{hours}); "
+        "Get-WinEvent -FilterHashtable @{LogName='System'; Id=41,6008; StartTime=$start} "
+        "-ErrorAction SilentlyContinue | Select-Object -First "
+        f"{limit} TimeCreated,Id,LevelDisplayName,Message | ConvertTo-Json -Compress",
+        timeout=30,
+    )
+    events = []
+    for item in _as_list(data):
+        if not isinstance(item, dict):
+            continue
+        message = str(item.get("Message") or "").replace("\r", " ").replace("\n", " ")
+        if len(message) > 160:
+            message = message[:157] + "..."
+        events.append({
+            "time": str(item.get("TimeCreated") or ""),
+            "id": item.get("Id"),
+            "level": str(item.get("LevelDisplayName") or ""),
+            "message": message,
+        })
+    return events

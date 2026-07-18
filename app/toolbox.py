@@ -489,7 +489,10 @@ def open_system_tool(tool_key):
         "task_manager": ["taskmgr.exe"],
         "resource_monitor": ["resmon.exe"],
         "device_manager": ["devmgmt.msc"],
+        "services": ["services.msc"],
+        "disk_cleanup": ["cleanmgr.exe"],
     }
+    msc_keys = {"device_manager", "services"}
     key = str(tool_key or "").strip().lower()
     command = mapping.get(key)
     if not command:
@@ -500,7 +503,7 @@ def open_system_tool(tool_key):
             errors=[f"Allowed tools: {', '.join(sorted(mapping))}"],
         )
     try:
-        if key == "device_manager":
+        if key in msc_keys:
             os.startfile(command[0])  # noqa: S606 - fixed allowlist only
         else:
             code, _stdout, stderr = _run_command(command, timeout=10)
@@ -509,6 +512,432 @@ def open_system_tool(tool_key):
     except OSError as exc:
         return ToolResult(False, title, f"Could not open {key}.", errors=[str(exc)])
     return ToolResult(True, title, f"Opened {key}.", command)
+
+
+SERVICE_STATUS_KEYS = {
+    "spooler": "Spooler",
+    "wuauserv": "wuauserv",
+    "bits": "BITS",
+    "audio": "Audiosrv",
+    "audiosrv": "Audiosrv",
+    "dhcp": "Dhcp",
+    "dnscache": "Dnscache",
+    "themes": "Themes",
+    "bluetooth": "bthserv",
+    "bthserv": "bthserv",
+    "defender": "WinDefend",
+    "firewall": "mpssvc",
+    "schedule": "Schedule",
+}
+
+
+TROUBLESHOOTER_KEYS = {
+    "internet": ("NetworkDiagnosticsWeb", "Internet Connections"),
+    "network_adapter": ("NetworkDiagnosticsNetworkAdapter", "Network Adapter"),
+    "audio": ("AudioPlaybackDiagnostic", "Playing Audio"),
+    "printer": ("PrinterDiagnostic", "Printer"),
+    "bluetooth": ("BluetoothDiagnostic", "Bluetooth"),
+    "windows_update": ("WindowsUpdateDiagnostic", "Windows Update"),
+}
+
+
+def check_disk_free_space():
+    title = "Disk Free Space"
+    try:
+        drives = sysinfo.get_disk_usage()
+    except Exception as exc:
+        return ToolResult(False, title, "Could not read disk free space.", errors=[str(exc)])
+    if not drives:
+        return ToolResult(False, title, "No disk volumes were found.")
+    details = []
+    for drive in drives:
+        details.append(
+            f"{drive['mountpoint']} {sysinfo.format_bytes(drive['free'])} free of "
+            f"{sysinfo.format_bytes(drive['total'])} ({drive['percent']:.0f}% used)"
+        )
+    low = [d for d in drives if d.get("percent", 0) >= 90]
+    summary = (
+        f"{len(low)} volume(s) are nearly full."
+        if low
+        else f"{len(drives)} volume(s) checked."
+    )
+    return ToolResult(True, title, summary, details)
+
+
+def list_printers():
+    title = "Printers"
+    if not is_windows():
+        return windows_only_result(title)
+    try:
+        printers = sysinfo.list_printers()
+    except Exception as exc:
+        return ToolResult(False, title, "Could not list printers.", errors=[str(exc)])
+    if not printers:
+        return ToolResult(True, title, "No printers were found.", [])
+    details = []
+    for item in printers:
+        default = " (default)" if item.get("is_default") else ""
+        details.append(
+            f"{item.get('name', '')}{default} — {item.get('status', '') or 'unknown'} "
+            f"[{item.get('port', '')}]"
+        )
+    return ToolResult(True, title, f"{len(printers)} printer(s) found.", details)
+
+
+def list_usb_devices():
+    title = "USB Devices"
+    if not is_windows():
+        return windows_only_result(title)
+    try:
+        devices = sysinfo.list_usb_devices()
+    except Exception as exc:
+        return ToolResult(False, title, "Could not list USB devices.", errors=[str(exc)])
+    if not devices:
+        return ToolResult(True, title, "No present USB devices were found.", [])
+    details = [
+        f"{item.get('name', '')} — {item.get('status', '')} ({item.get('class', '')})"
+        for item in devices
+    ]
+    return ToolResult(True, title, f"{len(devices)} USB device(s) found.", details)
+
+
+def list_running_services():
+    title = "Running Services"
+    if not is_windows():
+        return windows_only_result(title)
+    try:
+        services = sysinfo.list_windows_services(running_only=True, limit=50)
+    except Exception as exc:
+        return ToolResult(False, title, "Could not list services.", errors=[str(exc)])
+    details = [
+        f"{item.get('display_name') or item.get('name')} ({item.get('name')}) — {item.get('state')}"
+        for item in services
+    ]
+    return ToolResult(True, title, f"{len(services)} running service(s) listed.", details)
+
+
+def list_third_party_services():
+    title = "Third-Party Services"
+    if not is_windows():
+        return windows_only_result(title)
+    try:
+        services = sysinfo.list_windows_services(
+            running_only=True, limit=50, third_party_only=True
+        )
+    except Exception as exc:
+        return ToolResult(False, title, "Could not list third-party services.", errors=[str(exc)])
+    details = [
+        f"{item.get('display_name') or item.get('name')} ({item.get('name')})"
+        for item in services
+    ]
+    return ToolResult(
+        True,
+        title,
+        f"{len(services)} running third-party service(s) listed.",
+        details,
+    )
+
+
+def check_service_status(service_key):
+    title = "Service Status"
+    if not is_windows():
+        return windows_only_result(title)
+    key = str(service_key or "").strip().lower()
+    service_name = SERVICE_STATUS_KEYS.get(key)
+    if not service_name:
+        return ToolResult(
+            False,
+            title,
+            "Service key is not on the allowlist.",
+            errors=[f"Allowed keys: {', '.join(sorted(set(SERVICE_STATUS_KEYS)))}"],
+        )
+    try:
+        status = sysinfo.get_service_status(service_name)
+    except Exception as exc:
+        return ToolResult(False, title, "Could not read service status.", errors=[str(exc)])
+    if not status:
+        return ToolResult(False, title, f"Service {service_name} was not found.")
+    details = [
+        f"Name: {status.get('name')}",
+        f"Display name: {status.get('display_name')}",
+        f"Status: {status.get('status')}",
+        f"Start type: {status.get('start_type')}",
+    ]
+    return ToolResult(
+        True,
+        title,
+        f"{status.get('display_name') or status.get('name')} is {status.get('status')}.",
+        details,
+    )
+
+
+def list_problem_devices():
+    title = "Problem Devices"
+    if not is_windows():
+        return windows_only_result(title)
+    try:
+        devices = sysinfo.list_problem_devices()
+    except Exception as exc:
+        return ToolResult(False, title, "Could not list problem devices.", errors=[str(exc)])
+    if not devices:
+        return ToolResult(True, title, "No devices with problem status were found.", [])
+    details = [
+        f"{item.get('name')} — {item.get('status')}"
+        + (f" (problem {item.get('problem')})" if item.get("problem") else "")
+        for item in devices
+    ]
+    return ToolResult(True, title, f"{len(devices)} problem device(s) found.", details)
+
+
+def check_listening_ports():
+    title = "Listening Ports"
+    try:
+        ports = sysinfo.list_listening_ports(limit=25)
+    except Exception as exc:
+        return ToolResult(False, title, "Could not list listening ports.", errors=[str(exc)])
+    if not ports:
+        return ToolResult(
+            True,
+            title,
+            "No listening ports were reported (access may be limited).",
+            [],
+        )
+    details = [
+        f"{item.get('address')} — PID {item.get('pid')} {item.get('process') or ''}".strip()
+        for item in ports
+    ]
+    return ToolResult(True, title, f"{len(ports)} listening endpoint(s) listed.", details)
+
+
+def check_bluetooth_status():
+    title = "Bluetooth Status"
+    if not is_windows():
+        return windows_only_result(title)
+    try:
+        status = sysinfo.get_bluetooth_status()
+    except Exception as exc:
+        return ToolResult(False, title, "Could not read Bluetooth status.", errors=[str(exc)])
+    details = [
+        f"Bluetooth service: {status.get('service_status') or 'unknown'} "
+        f"(start {status.get('service_start_type') or 'unknown'})",
+    ]
+    for radio in status.get("radios") or []:
+        details.append(f"Radio: {radio.get('name')} — {radio.get('status')}")
+    if status.get("present"):
+        summary = "Bluetooth hardware/service signals were found."
+    else:
+        summary = "No Bluetooth adapter or service signals were found."
+    return ToolResult(True, title, summary, details)
+
+
+def check_unexpected_shutdowns(hours=72):
+    title = "Unexpected Shutdowns"
+    if not is_windows():
+        return windows_only_result(title)
+    try:
+        events = sysinfo.get_unexpected_shutdowns(hours=hours, limit=20)
+    except Exception as exc:
+        return ToolResult(False, title, "Could not read shutdown events.", errors=[str(exc)])
+    if not events:
+        return ToolResult(
+            True,
+            title,
+            f"No unexpected shutdown events found in the last {hours} hour(s).",
+            [],
+        )
+    details = [
+        f"[{item.get('time')}] Event {item.get('id')}: {item.get('message')}"
+        for item in events
+    ]
+    return ToolResult(
+        True,
+        title,
+        f"{len(events)} unexpected shutdown event(s) in the last {hours} hour(s).",
+        details,
+    )
+
+
+def check_component_store_health():
+    title = "Component Store Health"
+    if not is_windows():
+        return windows_only_result(title)
+    code, stdout, stderr = _run_command(
+        ["DISM.exe", "/Online", "/Cleanup-Image", "/CheckHealth"],
+        timeout=120,
+    )
+    details = [line.strip() for line in (stdout or "").splitlines() if line.strip()]
+    errors = [stderr] if stderr else []
+    # DISM CheckHealth often returns 0 even when corruption is detected; surface output.
+    summary = (
+        "Component store health check finished."
+        if code == 0
+        else "Component store health check reported a problem or needs elevation."
+    )
+    return ToolResult(code == 0, title, summary, details[:20], errors)
+
+
+def scan_volume_errors(volume=None):
+    title = "Volume Error Scan"
+    if not is_windows():
+        return windows_only_result(title)
+    raw = str(volume or os.environ.get("SystemDrive", "C:")).strip().upper()
+    letter = raw.replace("\\", "").replace("/", "").rstrip(":")
+    if len(letter) != 1 or not letter.isalpha():
+        return ToolResult(
+            False,
+            title,
+            "Volume must be a single drive letter such as C or C:.",
+            errors=[f"Requested volume: {volume}"],
+        )
+    candidate = f"{letter}:"
+    allowed = {
+        str(item.get("mountpoint", "")).replace("\\", "").replace("/", "").rstrip(":").upper()
+        for item in sysinfo.get_disk_usage()
+    }
+    if letter not in allowed:
+        return ToolResult(
+            False,
+            title,
+            "Volume is not on the allowlist of mounted drives.",
+            errors=[f"Requested volume: {candidate}"],
+        )
+    code, stdout, stderr = _run_command(["chkdsk.exe", candidate, "/scan"], timeout=300)
+    details = [line.strip() for line in (stdout or "").splitlines() if line.strip()][-20:]
+    errors = [stderr] if stderr else []
+    success = code == 0
+    return ToolResult(
+        success,
+        title,
+        f"Online volume scan finished for {candidate}."
+        if success
+        else f"Volume scan for {candidate} reported issues or needs elevation.",
+        details,
+        errors,
+    )
+
+
+def restart_print_spooler():
+    title = "Restart Print Spooler"
+    if not is_windows():
+        return windows_only_result(title)
+    code, stdout, stderr = _run_powershell(
+        "Restart-Service -Name Spooler -Force -ErrorAction Stop",
+        timeout=45,
+    )
+    success = code == 0
+    return ToolResult(
+        success,
+        title,
+        "Print Spooler restarted." if success else "Could not restart the Print Spooler.",
+        [stdout] if stdout else [],
+        [stderr] if stderr else [],
+    )
+
+
+def start_sfc_scan():
+    title = "System File Checker"
+    if not is_windows():
+        return windows_only_result(title)
+    code, stdout, stderr = _run_command(["sfc.exe", "/scannow"], timeout=900)
+    details = [line.strip() for line in (stdout or "").splitlines() if line.strip()][-25:]
+    errors = [stderr] if stderr else []
+    success = code == 0
+    return ToolResult(
+        success,
+        title,
+        "System File Checker finished."
+        if success
+        else "System File Checker failed or needs an elevated session.",
+        details,
+        errors,
+    )
+
+
+def open_windows_troubleshooter(troubleshooter_key):
+    title = "Open Windows Troubleshooter"
+    if not is_windows():
+        return windows_only_result(title)
+    key = str(troubleshooter_key or "").strip().lower()
+    entry = TROUBLESHOOTER_KEYS.get(key)
+    if not entry:
+        return ToolResult(
+            False,
+            title,
+            "Troubleshooter key is not on the allowlist.",
+            errors=[f"Allowed keys: {', '.join(sorted(TROUBLESHOOTER_KEYS))}"],
+        )
+    msdt_id, label = entry
+    code, _stdout, stderr = _run_command(["msdt.exe", "-id", msdt_id], timeout=15)
+    if code == 0:
+        return ToolResult(True, title, f"Opened {label} troubleshooter.", [msdt_id])
+    # Fallback for hosts where MSDT is restricted: open the Settings troubleshoot page.
+    try:
+        os.startfile("ms-settings:troubleshoot")  # noqa: S606 - fixed URI
+    except OSError as exc:
+        return ToolResult(
+            False,
+            title,
+            f"Could not open {label} troubleshooter.",
+            errors=[stderr or str(exc)],
+        )
+    return ToolResult(
+        True,
+        title,
+        f"Opened Troubleshoot settings (MSDT unavailable for {label}).",
+        [msdt_id],
+        [stderr] if stderr else [],
+    )
+
+
+def list_saved_layouts():
+    title = "Saved Layouts"
+    from app import window_layouts
+
+    try:
+        layouts = window_layouts.load_layouts()
+    except Exception as exc:
+        return ToolResult(False, title, "Could not load saved layouts.", errors=[str(exc)])
+    if not layouts:
+        return ToolResult(True, title, "No saved layouts were found.", [])
+    details = [
+        f"{item.get('name', 'Untitled')} (id={item.get('id', '')})"
+        for item in layouts
+    ]
+    return ToolResult(True, title, f"{len(layouts)} saved layout(s).", details)
+
+
+def delete_saved_layout(layout_id):
+    title = "Delete Layout"
+    from app import window_layouts
+
+    layout_id = str(layout_id or "").strip()
+    if not layout_id:
+        return ToolResult(False, title, "No layout was selected.", errors=["Missing layout id"])
+    try:
+        layouts = window_layouts.load_layouts()
+        match = next((item for item in layouts if item.get("id") == layout_id), None)
+        if not match:
+            return ToolResult(False, title, "No matching saved layout was found.")
+        remaining = [item for item in layouts if item.get("id") != layout_id]
+        window_layouts.save_layouts(remaining)
+    except Exception as exc:
+        return ToolResult(False, title, "Could not delete the saved layout.", errors=[str(exc)])
+    name = match.get("name", "layout")
+    return ToolResult(True, title, f"Deleted layout \"{name}\".", [layout_id])
+
+
+def clear_app_audio_route(pid, process_name=""):
+    title = "Clear App Audio Route"
+    from app import audio_control
+
+    try:
+        result = audio_control.clear_app_output_device(
+            process_id=int(pid) if pid else None,
+            process_name=process_name or None,
+        )
+    except Exception as exc:
+        return ToolResult(False, title, "Could not clear the app audio route.", errors=[str(exc)])
+    return ToolResult(result.success, title, result.message)
 
 
 def capture_window_layout(name="Assistant Layout"):

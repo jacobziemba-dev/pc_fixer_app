@@ -1,6 +1,6 @@
 ---
 name: AI Assistant Roadmap
-overview: Evidence-based AI Chat roadmap. Phase 1 helpers are partially landed in working tree but not wired into InferenceWorker yet; Phases 2–5 remain. Finish Phase 1 wiring first, then validation, Chat UX, ~20 skills, and assistant JobQueue.
+overview: Evidence-based AI Chat roadmap. ALL PHASES 1-5 SHIPPED (commits c47432c, b5091c7, f353066 on 2026-07-18) — 60 skills, fail-closed validation, single-confirm cards, Stop wired, assistant JobQueue scopes. Body sections below predate the landing and are kept for history; see "Status update" and "Wave D/E" sections.
 todos:
   - id: phase-1-context
     content: "Phase 1: Finish wiring — pass user_text into catalog + history into stream_query; add/fix tests (helpers already in ai_engine/assistant_core)"
@@ -30,7 +30,21 @@ Safety invariant stays: LLM emits validated skill JSON only; Python resolves tar
 
 ---
 
-## Current state (reviewed 2026-07-18)
+## Status update (2026-07-18, post-landing)
+
+Phases 1–5 are **complete and committed** (c47432c → b5091c7 → f353066). Verified against the committed tree:
+
+- `InferenceWorker` passes `build_skill_catalog(user_text=...)` and `history=` into `stream_query`; full suite 124/124 green.
+- Fail-closed `validate_skill_request`; `_resolve_allowlisted_scan_root`, `_resolve_adapter`, `_resolve_startup_item`, `_resolve_process` in place; keyword fallback gated.
+- Single ActionCard confirm (no QMessageBox, no Confirmed-on-cancel); Stop wired via `ChatInputDock.stop_requested`; per-kind follow-ups.
+- 60 skills / 60 tools registered; `skills_list.md` in sync.
+- Inference/actions submit through `get_job_queue()` scopes `assistant-inference` / `assistant-actions`.
+
+Next work is tracked in the newer plan (safety-gap hardening, prompt-quality work, and skill Waves D/E — see the Wave D/E section at the bottom of this file).
+
+---
+
+## Current state (reviewed 2026-07-18, PRE-LANDING — historical)
 
 ### Baseline (committed / already shipped)
 
@@ -192,13 +206,13 @@ Primary files: [`app/assistant_tab.py`](app/assistant_tab.py), [`app/chat_widget
 
 | Phase | Focus | Status | Next action |
 | --- | --- | --- | --- |
-| 1 | Context + catalog + history | **~70% helpers; 0% Chat wiring** | Wire `InferenceWorker` + fix tests |
-| 2 | Validation + resolution | Not started | After Phase 1 green |
-| 3 | Chat UX | Not started | Can lightly parallel Phase 2 |
-| 4 | Skills A→B→C | Not started | Requires Phase 1 wired |
-| 5 | Assistant JobQueue | Not started | After Phase 3 preferred |
+| 1 | Context + catalog + history | **Complete** (b5091c7) | — |
+| 2 | Validation + resolution | **Complete** (b5091c7) | — |
+| 3 | Chat UX | **Complete** (b5091c7) | — |
+| 4 | Skills A→B→C | **Complete** (c47432c/b5091c7) | Waves D/E below |
+| 5 | Assistant JobQueue | **Complete** (b5091c7) | — |
 
-Recommended ship order: **finish 1 → 2 → 3 → 4A → 4B → 4C → 5**.
+Shipped in order: **1 → 2 → 3 → 4A → 4B → 4C → 5**.
 
 ---
 
@@ -209,3 +223,35 @@ Recommended ship order: **finish 1 → 2 → 3 → 4A → 4B → 4C → 5**.
 - Later: reject-unknown-args, path allowlist, ActionCard-only confirm, fallback gating, new skill waves
 - `py_compile` touched modules; full `pytest` before merging a phase
 - Manual smoke after Phase 1 wire: “why is my PC slow?” should not inject the full 39-skill catalog
+
+---
+
+## Wave D/E — next skill expansion (planned 2026-07-18)
+
+Follow the 6-step add-a-skill pattern (CLAUDE.md). Ship Wave D first, then E. `skills_list.md` rows land in the same change as each wave.
+
+### Wave D — existing backends / thin wrappers
+
+| Skill | Risk | Confirm | Backend |
+| --- | --- | --- | --- |
+| `list_installed_programs` | Read-only | No | `system_info.get_installed_programs` + toolbox wrapper |
+| `set_system_volume` | Low | Yes | New pycaw endpoint-volume fn in `audio_control` |
+| `mute_system_audio` | Low | Yes | Shares fn with `set_system_volume` |
+| `delete_saved_layout` | Medium | Yes | `window_layouts` delete helper + existing `_resolve_layout` |
+| `check_proxy_settings` | Read-only | No | Fixed `netsh winhttp show proxy` |
+| `check_bluetooth_status` | Read-only | No | `Get-PnpDevice -Class Bluetooth` (read-only) |
+
+### Wave E — new fixed-command backends
+
+| Skill | Risk | Confirm | Fixed command |
+| --- | --- | --- | --- |
+| `check_component_store_health` | Read-only | No | `DISM /Online /Cleanup-Image /CheckHealth` |
+| `run_sfc_scan` | Medium | Yes | `sfc /scannow` |
+| `restart_print_spooler` | Medium | Yes | `restart_allowlisted_service("spooler")` — frozen service map, never free-form |
+| `restart_audio_service` | Medium | Yes | `restart_allowlisted_service("audiosvc")` |
+| `resync_system_clock` | Low | Yes | `w32tm /resync` |
+| `export_battery_report` | Read-only | No | `powercfg /batteryreport` into `reports/` |
+| `run_defender_quick_scan` | Low | Yes | `Start-MpScan -ScanType QuickScan` |
+| `check_hosts_file` | Read-only | No | Read `drivers\etc\hosts`, report non-comment entries |
+
+**Excluded on purpose:** arbitrary service restart, Windows Update cache reset, registry-edit surfaces, drive defrag, kill-by-path.

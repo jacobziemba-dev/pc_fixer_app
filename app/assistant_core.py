@@ -307,6 +307,101 @@ ASSISTANT_TOOLS = {
         confirm_label="Scan",
         keywords=("large files", "big files", "find space", "disk space"),
     ),
+    "scan_folder_sizes": AssistantTool(
+        "scan_folder_sizes",
+        "Scan folder sizes",
+        "Break down folder sizes under common user locations without deleting anything.",
+        payload_schema={"max_entries": "int?"},
+        confirm_label="Scan",
+        keywords=("folder size", "what's using space", "disk usage", "largest folders"),
+    ),
+    "scan_duplicate_files": AssistantTool(
+        "scan_duplicate_files",
+        "Scan duplicate files",
+        "Find duplicate file groups by size and content hash. Report only; does not delete.",
+        payload_schema={"min_size_mb": "int?", "limit_groups": "int?"},
+        confirm_label="Scan",
+        keywords=("duplicates", "duplicate files", "copy of", "same file"),
+    ),
+    "end_process": AssistantTool(
+        "end_process",
+        "End process",
+        "End one non-protected process by PID after confirmation.",
+        risk=MEDIUM_RISK,
+        requires_confirmation=True,
+        payload_schema={"pid": "int"},
+        confirm_label="End Process",
+        keywords=("end process", "kill process", "close process", "task manager"),
+    ),
+    "set_startup_item_enabled": AssistantTool(
+        "set_startup_item_enabled",
+        "Enable or disable startup item",
+        "Enable or disable one allowlisted startup Run value or Startup-folder shortcut.",
+        risk=MEDIUM_RISK,
+        requires_confirmation=True,
+        payload_schema={"name": "str", "source": "str", "enabled": "bool", "command": "str?"},
+        confirm_label="Apply",
+        keywords=("disable startup", "enable startup", "startup apps", "boot programs"),
+    ),
+    "renew_ip_address": AssistantTool(
+        "renew_ip_address",
+        "Renew IP address",
+        "Release and renew the Windows IP address configuration.",
+        risk=LOW_RISK,
+        requires_confirmation=True,
+        confirm_label="Renew IP",
+        keywords=("renew ip", "release renew", "new ip", "ipconfig"),
+    ),
+    "reset_winsock": AssistantTool(
+        "reset_winsock",
+        "Reset Winsock",
+        "Reset the Windows Winsock catalog. A reboot may be required afterward.",
+        risk=MEDIUM_RISK,
+        requires_confirmation=True,
+        confirm_label="Reset Winsock",
+        keywords=("winsock", "reset network stack", "tcp reset"),
+    ),
+    "check_pending_reboot": AssistantTool(
+        "check_pending_reboot",
+        "Check pending reboot",
+        "Check whether Windows reports a pending reboot.",
+        confirm_label="Check",
+        keywords=("reboot pending", "restart required", "pending reboot"),
+    ),
+    "check_battery_report": AssistantTool(
+        "check_battery_report",
+        "Check battery report",
+        "Read laptop battery charge and capacity signals when available.",
+        confirm_label="Check",
+        keywords=("battery", "battery health", "charge"),
+    ),
+    "restart_explorer": AssistantTool(
+        "restart_explorer",
+        "Restart Explorer",
+        "Restart Windows Explorer to recover a frozen taskbar or desktop shell.",
+        risk=LOW_RISK,
+        requires_confirmation=True,
+        confirm_label="Restart Explorer",
+        keywords=("restart explorer", "frozen taskbar", "desktop frozen"),
+    ),
+    "open_windows_settings": AssistantTool(
+        "open_windows_settings",
+        "Open Windows Settings",
+        "Open one allowlisted Windows Settings page.",
+        risk=LOW_RISK,
+        payload_schema={"page": "str"},
+        confirm_label="Open",
+        keywords=("open settings", "windows settings", "settings page"),
+    ),
+    "open_known_folder": AssistantTool(
+        "open_known_folder",
+        "Open known folder",
+        "Open one allowlisted known folder such as Temp, Downloads, or Startup.",
+        risk=LOW_RISK,
+        payload_schema={"folder": "str"},
+        confirm_label="Open",
+        keywords=("open folder", "temp folder", "downloads folder", "startup folder"),
+    ),
     "create_restore_point": AssistantTool(
         "create_restore_point",
         "Create restore point",
@@ -538,6 +633,94 @@ ASSISTANT_SKILLS = {
         ASSISTANT_TOOLS["scan_large_files"].risk,
         ASSISTANT_TOOLS["scan_large_files"].requires_confirmation,
         "scan_large_files",
+    ),
+    "scan_folder_sizes": AssistantSkill(
+        "scan_folder_sizes",
+        "Break down folder sizes under common user locations.",
+        {"max_entries": "int?"},
+        ASSISTANT_TOOLS["scan_folder_sizes"].risk,
+        ASSISTANT_TOOLS["scan_folder_sizes"].requires_confirmation,
+        "scan_folder_sizes",
+    ),
+    "scan_duplicate_files": AssistantSkill(
+        "scan_duplicate_files",
+        "Find duplicate file groups without deleting anything.",
+        {"min_size_mb": "int?", "limit_groups": "int?"},
+        ASSISTANT_TOOLS["scan_duplicate_files"].risk,
+        ASSISTANT_TOOLS["scan_duplicate_files"].requires_confirmation,
+        "scan_duplicate_files",
+    ),
+    "end_process": AssistantSkill(
+        "end_process",
+        "End one non-protected process by PID.",
+        {"pid": "int"},
+        ASSISTANT_TOOLS["end_process"].risk,
+        ASSISTANT_TOOLS["end_process"].requires_confirmation,
+        "end_process",
+    ),
+    "set_startup_item_enabled": AssistantSkill(
+        "set_startup_item_enabled",
+        "Enable or disable one allowlisted startup item.",
+        {"name": "str", "source": "str", "enabled": "bool", "command": "str?"},
+        ASSISTANT_TOOLS["set_startup_item_enabled"].risk,
+        ASSISTANT_TOOLS["set_startup_item_enabled"].requires_confirmation,
+        "set_startup_item_enabled",
+    ),
+    "renew_ip_address": AssistantSkill(
+        "renew_ip_address",
+        "Release and renew the Windows IP address.",
+        {},
+        ASSISTANT_TOOLS["renew_ip_address"].risk,
+        ASSISTANT_TOOLS["renew_ip_address"].requires_confirmation,
+        "renew_ip_address",
+    ),
+    "reset_winsock": AssistantSkill(
+        "reset_winsock",
+        "Reset the Windows Winsock catalog.",
+        {},
+        ASSISTANT_TOOLS["reset_winsock"].risk,
+        ASSISTANT_TOOLS["reset_winsock"].requires_confirmation,
+        "reset_winsock",
+    ),
+    "check_pending_reboot": AssistantSkill(
+        "check_pending_reboot",
+        "Check whether Windows reports a pending reboot.",
+        {},
+        ASSISTANT_TOOLS["check_pending_reboot"].risk,
+        ASSISTANT_TOOLS["check_pending_reboot"].requires_confirmation,
+        "check_pending_reboot",
+    ),
+    "check_battery_report": AssistantSkill(
+        "check_battery_report",
+        "Read laptop battery status when available.",
+        {},
+        ASSISTANT_TOOLS["check_battery_report"].risk,
+        ASSISTANT_TOOLS["check_battery_report"].requires_confirmation,
+        "check_battery_report",
+    ),
+    "restart_explorer": AssistantSkill(
+        "restart_explorer",
+        "Restart Windows Explorer.",
+        {},
+        ASSISTANT_TOOLS["restart_explorer"].risk,
+        ASSISTANT_TOOLS["restart_explorer"].requires_confirmation,
+        "restart_explorer",
+    ),
+    "open_windows_settings": AssistantSkill(
+        "open_windows_settings",
+        "Open one allowlisted Windows Settings page.",
+        {"page": "str"},
+        ASSISTANT_TOOLS["open_windows_settings"].risk,
+        ASSISTANT_TOOLS["open_windows_settings"].requires_confirmation,
+        "open_windows_settings",
+    ),
+    "open_known_folder": AssistantSkill(
+        "open_known_folder",
+        "Open one allowlisted known folder.",
+        {"folder": "str"},
+        ASSISTANT_TOOLS["open_known_folder"].risk,
+        ASSISTANT_TOOLS["open_known_folder"].requires_confirmation,
+        "open_known_folder",
     ),
     "create_restore_point": AssistantSkill(
         "create_restore_point",
@@ -1406,6 +1589,69 @@ def skill_request_to_action(request, snapshot=None):
             payload["min_size_mb"] = int(args["min_size_mb"])
         return _action(kind, payload=payload), ""
 
+    if kind == "scan_folder_sizes":
+        payload = {}
+        if args.get("max_entries") is not None:
+            payload["max_entries"] = max(1, min(int(args["max_entries"]), 100))
+        return _action(kind, payload=payload), ""
+
+    if kind == "scan_duplicate_files":
+        payload = {}
+        if args.get("min_size_mb") is not None:
+            payload["min_size_mb"] = max(1, int(args["min_size_mb"]))
+        if args.get("limit_groups") is not None:
+            payload["limit_groups"] = max(1, min(int(args["limit_groups"]), 100))
+        return _action(kind, payload=payload), ""
+
+    if kind == "end_process":
+        pid = int(args["pid"])
+        allowed, info = sysinfo.is_process_termination_allowed(pid)
+        if not allowed:
+            return None, info
+        return _action(
+            kind,
+            description=f"End process PID {pid}.",
+            payload={"pid": pid},
+        ), ""
+
+    if kind == "set_startup_item_enabled":
+        name = str(args.get("name", "")).strip()
+        source = str(args.get("source", "")).strip()
+        enabled = bool(args.get("enabled"))
+        if not name or not source:
+            return None, "Startup item name and source are required."
+        payload = {"name": name, "source": source, "enabled": enabled}
+        if args.get("command"):
+            payload["command"] = str(args["command"])
+        verb = "Enable" if enabled else "Disable"
+        return _action(
+            kind,
+            description=f"{verb} startup item \"{name}\" ({source}).",
+            payload=payload,
+        ), ""
+
+    if kind == "open_windows_settings":
+        page = str(args.get("page", "")).strip().lower()
+        allowed = {"display", "network", "windows_update", "apps", "sound"}
+        if page not in allowed:
+            return None, "Settings page must be display, network, windows_update, apps, or sound."
+        return _action(
+            kind,
+            description=f"Open Windows Settings page ({page}).",
+            payload={"page": page},
+        ), ""
+
+    if kind == "open_known_folder":
+        folder = str(args.get("folder", "")).strip().lower()
+        allowed = {"temp", "downloads", "startup", "local_appdata", "recycle_bin"}
+        if folder not in allowed:
+            return None, "Folder must be temp, downloads, startup, local_appdata, or recycle_bin."
+        return _action(
+            kind,
+            description=f"Open known folder ({folder}).",
+            payload={"folder": folder},
+        ), ""
+
     if kind == "create_restore_point":
         description = str(args.get("description") or "PC Fix restore point")
         return _action(
@@ -1624,6 +1870,36 @@ def _execute_toolbox_action(action):
             root=payload.get("root"),
             min_size_mb=payload.get("min_size_mb", 500),
         )
+    if kind == "scan_folder_sizes":
+        return toolbox.scan_folder_sizes(max_entries=payload.get("max_entries", 40))
+    if kind == "scan_duplicate_files":
+        return toolbox.scan_duplicate_files(
+            min_size_mb=payload.get("min_size_mb", 1),
+            limit_groups=payload.get("limit_groups", 25),
+        )
+    if kind == "end_process":
+        return toolbox.end_process(payload.get("pid"))
+    if kind == "set_startup_item_enabled":
+        return toolbox.set_startup_item_enabled(
+            payload.get("name", ""),
+            payload.get("source", ""),
+            bool(payload.get("enabled")),
+            command=payload.get("command", ""),
+        )
+    if kind == "renew_ip_address":
+        return toolbox.renew_ip_address()
+    if kind == "reset_winsock":
+        return toolbox.reset_winsock()
+    if kind == "check_pending_reboot":
+        return toolbox.check_pending_reboot()
+    if kind == "check_battery_report":
+        return toolbox.check_battery_report()
+    if kind == "restart_explorer":
+        return toolbox.restart_explorer()
+    if kind == "open_windows_settings":
+        return toolbox.open_windows_settings(payload.get("page", ""))
+    if kind == "open_known_folder":
+        return toolbox.open_known_folder(payload.get("folder", ""))
     if kind == "create_restore_point":
         return toolbox.create_restore_point(payload.get("description", "PC Fix restore point"))
     if kind == "export_pc_report":

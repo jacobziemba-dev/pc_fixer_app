@@ -2,11 +2,13 @@ from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QMessageBox,
-    QAbstractItemView,
+    QAbstractItemView, QTextEdit,
 )
 
 from app import system_info as sysinfo
+from app import toolbox
 from app.job_queue import get_job_queue
+from app.toolbox_widgets import ToolRunner, result_text, set_status_label
 
 
 class ScanWorker(QThread):
@@ -86,6 +88,45 @@ class CleanupTab(QWidget):
 
         outer.addWidget(group, 1)
 
+        storage = QGroupBox("Storage Diagnostics (read-only)")
+        storage_layout = QVBoxLayout(storage)
+        storage_caption = QLabel(
+            "Find large files, folder size hotspots, and duplicate copies. "
+            "These scans never delete files."
+        )
+        storage_caption.setProperty("role", "caption")
+        storage_caption.setWordWrap(True)
+        storage_layout.addWidget(storage_caption)
+        buttons = QHBoxLayout()
+        self.large_files_btn = QPushButton("Scan Large Files")
+        self.large_files_btn.clicked.connect(
+            lambda: self._run_storage_tool(toolbox.scan_large_files)
+        )
+        self.folder_sizes_btn = QPushButton("Folder Sizes")
+        self.folder_sizes_btn.setProperty("variant", "secondary")
+        self.folder_sizes_btn.clicked.connect(
+            lambda: self._run_storage_tool(toolbox.scan_folder_sizes)
+        )
+        self.duplicates_btn = QPushButton("Find Duplicates")
+        self.duplicates_btn.setProperty("variant", "secondary")
+        self.duplicates_btn.clicked.connect(
+            lambda: self._run_storage_tool(toolbox.scan_duplicate_files)
+        )
+        buttons.addWidget(self.large_files_btn)
+        buttons.addWidget(self.folder_sizes_btn)
+        buttons.addWidget(self.duplicates_btn)
+        buttons.addStretch(1)
+        storage_layout.addLayout(buttons)
+        self.storage_status = QLabel("Choose a storage scan to begin.")
+        self.storage_status.setProperty("role", "caption")
+        self.storage_status.setWordWrap(True)
+        storage_layout.addWidget(self.storage_status)
+        self.storage_output = QTextEdit()
+        self.storage_output.setReadOnly(True)
+        self.storage_output.setMinimumHeight(120)
+        storage_layout.addWidget(self.storage_output)
+        outer.addWidget(storage)
+
         footer_layout = QHBoxLayout()
         footer_layout.addStretch(1)
         self.clean_btn = QPushButton("Clean Selected Items")
@@ -98,6 +139,29 @@ class CleanupTab(QWidget):
         self._categories = []
         self._checkboxes = []
         self._rescan_after_clean = False
+        self._storage_runner = ToolRunner(
+            "cleanup",
+            self._set_storage_busy,
+            self.storage_status,
+            busy_text="Running storage scan...",
+        )
+
+    def _set_storage_busy(self, busy):
+        for button in (self.large_files_btn, self.folder_sizes_btn, self.duplicates_btn):
+            button.setEnabled(not busy)
+        if busy:
+            self.scan_btn.setEnabled(False)
+            self.clean_btn.setEnabled(False)
+        else:
+            self.scan_btn.setEnabled(True)
+            self._update_total()
+
+    def _run_storage_tool(self, fn, *args):
+        self._storage_runner.start(fn, args, self._on_storage_result)
+
+    def _on_storage_result(self, result):
+        set_status_label(self.storage_status, result.summary, result.success)
+        self.storage_output.setPlainText(result_text(result))
 
     def start_scan(self):
         worker = ScanWorker()
@@ -117,6 +181,9 @@ class CleanupTab(QWidget):
         self.clean_btn.setEnabled(False)
         self.select_all_btn.setEnabled(False)
         self.select_none_btn.setEnabled(False)
+        self.large_files_btn.setEnabled(False)
+        self.folder_sizes_btn.setEnabled(False)
+        self.duplicates_btn.setEnabled(False)
         self.status_label.setText("Scanning temp folders, browser caches, and Recycle Bin...")
         self.table.setRowCount(0)
 
@@ -124,6 +191,9 @@ class CleanupTab(QWidget):
         self.scan_btn.setEnabled(True)
         self.select_all_btn.setEnabled(True)
         self.select_none_btn.setEnabled(True)
+        self.large_files_btn.setEnabled(True)
+        self.folder_sizes_btn.setEnabled(True)
+        self.duplicates_btn.setEnabled(True)
         self._update_total()
         if self._rescan_after_clean:
             self._rescan_after_clean = False
@@ -211,6 +281,9 @@ class CleanupTab(QWidget):
         self.scan_btn.setEnabled(False)
         self.select_all_btn.setEnabled(False)
         self.select_none_btn.setEnabled(False)
+        self.large_files_btn.setEnabled(False)
+        self.folder_sizes_btn.setEnabled(False)
+        self.duplicates_btn.setEnabled(False)
         self.status_label.setText("Cleaning selected items...")
 
     def _on_cleaned(self, bytes_freed, errors):

@@ -415,6 +415,261 @@ def scan_large_files(root=None, min_size_mb=500, limit=25):
     return ToolResult(True, title, summary, details)
 
 
+def scan_folder_sizes(roots=None, max_entries=40):
+    title = "Folder Sizes"
+    try:
+        entries = sysinfo.scan_folder_size_breakdown(roots=roots, max_entries=max_entries)
+    except Exception as exc:
+        return ToolResult(False, title, "Could not scan folder sizes.", errors=[str(exc)])
+    if not entries:
+        return ToolResult(True, title, "No sized folders were found under the default scan roots.")
+    details = [
+        f"{sysinfo.format_bytes(entry['size_bytes'])} - {entry['path']} ({entry['file_count']} files)"
+        for entry in entries
+    ]
+    total = sum(entry["size_bytes"] for entry in entries)
+    return ToolResult(
+        True,
+        title,
+        f"Top {len(entries)} folder(s) total {sysinfo.format_bytes(total)}.",
+        details,
+    )
+
+
+def scan_duplicate_files(roots=None, min_size_mb=1, limit_groups=25):
+    title = "Duplicate Files"
+    try:
+        groups = sysinfo.find_duplicate_files(
+            roots=roots,
+            min_size_mb=min_size_mb,
+            limit_groups=limit_groups,
+        )
+    except Exception as exc:
+        return ToolResult(False, title, "Could not scan for duplicate files.", errors=[str(exc)])
+    if not groups:
+        return ToolResult(True, title, "No duplicate file groups were found.")
+    details = []
+    for group in groups:
+        details.append(
+            f"{group['count']} copies × {sysinfo.format_bytes(group['size_bytes'])} "
+            f"(hash {group['hash'][:8]}…)"
+        )
+        details.extend(f"  - {path}" for path in group["paths"][:4])
+        if len(group["paths"]) > 4:
+            details.append(f"  - …and {len(group['paths']) - 4} more")
+    return ToolResult(
+        True,
+        title,
+        f"Found {len(groups)} duplicate group(s). Nothing was deleted.",
+        details,
+    )
+
+
+def end_process(pid):
+    title = "End Process"
+    success, message = sysinfo.terminate_process(pid)
+    return ToolResult(success, title, message, errors=[] if success else [message])
+
+
+def set_startup_item_enabled(name, source, enabled, command=""):
+    title = "Startup Item"
+    success, message = sysinfo.set_startup_item_enabled(name, source, enabled, command=command)
+    return ToolResult(success, title, message, errors=[] if success else [message])
+
+
+def renew_ip_address():
+    title = "Renew IP Address"
+    if not is_windows():
+        return windows_only_result(title)
+    release_code, release_out, release_err = _run_command(["ipconfig", "/release"], timeout=45)
+    renew_code, renew_out, renew_err = _run_command(["ipconfig", "/renew"], timeout=60)
+    details = [line for line in (release_out, renew_out) if line]
+    errors = [line for line in (release_err, renew_err) if line]
+    success = renew_code == 0
+    if release_code != 0 and renew_code == 0:
+        # Some adapters fail release but still renew successfully.
+        success = True
+    return ToolResult(
+        success,
+        title,
+        "IP address renewed." if success else "Could not renew the IP address.",
+        details,
+        errors,
+    )
+
+
+def reset_winsock():
+    title = "Reset Winsock"
+    if not is_windows():
+        return windows_only_result(title)
+    code, stdout, stderr = _run_command(["netsh", "winsock", "reset"], timeout=45)
+    success = code == 0
+    details = [line for line in (stdout,) if line]
+    details.append("A reboot may be required for Winsock reset to finish applying.")
+    return ToolResult(
+        success,
+        title,
+        "Winsock catalog reset requested." if success else "Could not reset Winsock.",
+        details,
+        [stderr] if stderr else [],
+    )
+
+
+def check_pending_reboot():
+    title = "Pending Reboot"
+    if not is_windows():
+        return windows_only_result(title)
+    data, error = _run_json_powershell(
+        "$paths = @("
+        "'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending',"
+        "'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired',"
+        "'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\PendingFileRenameOperations'"
+        "); "
+        "$hits = @(); "
+        "foreach ($p in $paths) { if (Test-Path $p) { $hits += $p } }; "
+        "[pscustomobject]@{RebootPending=($hits.Count -gt 0); Paths=$hits} | ConvertTo-Json -Compress",
+        timeout=15,
+    )
+    if not isinstance(data, dict):
+        return ToolResult(False, title, "Could not check pending reboot state.", errors=[error] if error else [])
+    pending = bool(data.get("RebootPending"))
+    details = []
+    for path in _as_list(data.get("Paths")):
+        details.append(f"Signal: {path}")
+    summary = "A reboot appears pending." if pending else "No reboot-pending signals were found."
+    return ToolResult(not error, title, summary, details, [error] if error else [])
+
+
+def check_battery_report():
+    title = "Battery Report"
+    if not is_windows():
+        return windows_only_result(title)
+    data, error = _run_json_powershell(
+        "$battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue; "
+        "if (-not $battery) { [pscustomobject]@{Present=$false} | ConvertTo-Json -Compress; return }; "
+        "$bat = if ($battery -is [array]) { $battery[0] } else { $battery }; "
+        "[pscustomobject]@{"
+        "Present=$true;"
+        "Name=$bat.Name;"
+        "Status=$bat.Status;"
+        "EstimatedChargeRemaining=$bat.EstimatedChargeRemaining;"
+        "BatteryStatus=$bat.BatteryStatus;"
+        "DesignCapacity=$bat.DesignCapacity;"
+        "FullChargedCapacity=$bat.FullChargedCapacity"
+        "} | ConvertTo-Json -Compress",
+        timeout=20,
+    )
+    if not isinstance(data, dict):
+        return ToolResult(False, title, "Could not read battery information.", errors=[error] if error else [])
+    if not data.get("Present"):
+        return ToolResult(True, title, "No battery was detected (desktop or battery class unavailable).")
+    details = [
+        f"Name: {data.get('Name') or 'Battery'}",
+        f"Status: {data.get('Status') or 'Unknown'}",
+        f"Charge remaining: {data.get('EstimatedChargeRemaining', '?')}%",
+    ]
+    design = data.get("DesignCapacity")
+    full = data.get("FullChargedCapacity")
+    if design and full:
+        try:
+            health = (float(full) / float(design)) * 100.0
+            details.append(f"Capacity health estimate: {health:.0f}% ({full} / {design})")
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+    return ToolResult(not error, title, "Battery status checked.", details, [error] if error else [])
+
+
+def restart_explorer():
+    title = "Restart Explorer"
+    if not is_windows():
+        return windows_only_result(title)
+    kill_code, kill_out, kill_err = _run_command(["taskkill", "/F", "/IM", "explorer.exe"], timeout=20)
+    start_code, start_out, start_err = _run_command(
+        ["cmd.exe", "/c", "start", "", "explorer.exe"],
+        timeout=20,
+    )
+    details = [line for line in (kill_out, start_out) if line]
+    errors = [line for line in (kill_err, start_err) if line]
+    # taskkill returns non-zero when Explorer was not running; still try to start it.
+    success = start_code == 0
+    return ToolResult(
+        success,
+        title,
+        "Windows Explorer restart requested." if success else "Could not restart Windows Explorer.",
+        details,
+        errors,
+    )
+
+
+_SETTINGS_PAGES = {
+    "display": "ms-settings:display",
+    "network": "ms-settings:network",
+    "windows_update": "ms-settings:windowsupdate",
+    "apps": "ms-settings:appsfeatures",
+    "sound": "ms-settings:sound",
+}
+
+
+def open_windows_settings(page):
+    title = "Open Settings"
+    if not is_windows():
+        return windows_only_result(title)
+    key = str(page or "").strip().lower()
+    uri = _SETTINGS_PAGES.get(key)
+    if not uri:
+        return ToolResult(
+            False,
+            title,
+            "Unsupported Settings page.",
+            errors=[f"Allowed pages: {', '.join(sorted(_SETTINGS_PAGES))}"],
+        )
+    try:
+        os.startfile(uri)  # noqa: S606 - fixed ms-settings allowlist only
+    except OSError as exc:
+        return ToolResult(False, title, "Could not open Windows Settings.", errors=[str(exc)])
+    return ToolResult(True, title, f"Opened Windows Settings ({key}).", [uri])
+
+
+def _known_folders():
+    local = os.environ.get("LOCALAPPDATA", "")
+    appdata = os.environ.get("APPDATA", "")
+    return {
+        "temp": os.environ.get("TEMP") or os.environ.get("TMP") or "",
+        "downloads": str(Path.home() / "Downloads"),
+        "startup": os.path.join(appdata, r"Microsoft\Windows\Start Menu\Programs\Startup"),
+        "local_appdata": local,
+        "recycle_bin": "shell:RecycleBinFolder",
+    }
+
+
+def open_known_folder(folder_key):
+    title = "Open Folder"
+    key = str(folder_key or "").strip().lower()
+    folders = _known_folders()
+    target = folders.get(key)
+    if not target:
+        return ToolResult(
+            False,
+            title,
+            "Unsupported folder.",
+            errors=[f"Allowed folders: {', '.join(sorted(folders))}"],
+        )
+    if key != "recycle_bin" and not os.path.isdir(target):
+        return ToolResult(False, title, "That folder does not exist on this PC.", errors=[target])
+    try:
+        if key == "recycle_bin":
+            if not is_windows():
+                return windows_only_result(title)
+            code, _stdout, stderr = _run_command(["explorer.exe", "shell:RecycleBinFolder"], timeout=15)
+            if code != 0:
+                return ToolResult(False, title, "Could not open Recycle Bin.", errors=[stderr] if stderr else [])
+        else:
+            os.startfile(target)  # noqa: S606 - fixed known-folder allowlist only
+    except OSError as exc:
+        return ToolResult(False, title, "Could not open the folder.", errors=[str(exc)])
+    return ToolResult(True, title, f"Opened {key}.", [target])
+
+
 def create_restore_point(description="PC Fix restore point"):
     title = "Create Restore Point"
     if not is_windows():

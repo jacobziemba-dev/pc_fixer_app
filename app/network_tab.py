@@ -42,8 +42,16 @@ class NetworkTab(QWidget):
         self.flush_btn = QPushButton("Flush DNS Cache")
         self.flush_btn.setProperty("variant", "secondary")
         self.flush_btn.clicked.connect(self._confirm_flush_dns)
+        self.renew_ip_btn = QPushButton("Renew IP")
+        self.renew_ip_btn.setProperty("variant", "secondary")
+        self.renew_ip_btn.clicked.connect(self._confirm_renew_ip)
+        self.winsock_btn = QPushButton("Reset Winsock")
+        self.winsock_btn.setProperty("variant", "danger")
+        self.winsock_btn.clicked.connect(self._confirm_reset_winsock)
         checks_layout.addWidget(self.check_btn)
         checks_layout.addWidget(self.flush_btn)
+        checks_layout.addWidget(self.renew_ip_btn)
+        checks_layout.addWidget(self.winsock_btn)
         checks_layout.addStretch(1)
         outer.addWidget(checks)
 
@@ -83,7 +91,10 @@ class NetworkTab(QWidget):
         self.restart_btn.setEnabled(self.adapter_combo.count() > 0)
 
     def _set_busy(self, busy):
-        for button in (self.refresh_adapters_btn, self.check_btn, self.flush_btn, self.restart_btn):
+        for button in (
+            self.refresh_adapters_btn, self.check_btn, self.flush_btn,
+            self.renew_ip_btn, self.winsock_btn, self.restart_btn,
+        ):
             button.setEnabled(not busy)
 
     def _run_tool(self, fn, *args):
@@ -119,3 +130,26 @@ class NetworkTab(QWidget):
         )
         if reply == QMessageBox.Yes:
             self._run_tool(toolbox.restart_network_adapter, adapter)
+
+    def _confirm_renew_ip(self):
+        reply = QMessageBox.question(
+            self,
+            "Confirm Renew IP",
+            "Release and renew the Windows IP address? This may briefly disconnect your network.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self._run_tool(toolbox.renew_ip_address)
+
+    def _confirm_reset_winsock(self):
+        reply = QMessageBox.question(
+            self,
+            "Confirm Winsock Reset",
+            "Reset the Windows Winsock catalog?\n\n"
+            "This can repair broken networking but often requires a reboot afterward.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self._run_tool(toolbox.reset_winsock)

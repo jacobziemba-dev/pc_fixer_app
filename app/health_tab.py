@@ -36,12 +36,16 @@ class HealthTab(QWidget):
         self.events_btn = QPushButton("Event Logs")
         self.security_btn = QPushButton("Security")
         self.startup_btn = QPushButton("Startup Impact")
+        self.reboot_btn = QPushButton("Pending Reboot")
+        self.battery_btn = QPushButton("Battery")
         for button, fn in (
             (self.update_btn, toolbox.check_windows_updates),
             (self.disk_btn, toolbox.check_disk_health),
             (self.events_btn, toolbox.scan_event_log_errors),
             (self.security_btn, toolbox.check_windows_security),
             (self.startup_btn, toolbox.review_startup_impact),
+            (self.reboot_btn, toolbox.check_pending_reboot),
+            (self.battery_btn, toolbox.check_battery_report),
         ):
             button.clicked.connect(lambda checked=False, fn=fn: self._run_tool(fn))
             checks_layout.addWidget(button)
@@ -64,14 +68,37 @@ class HealthTab(QWidget):
         power_layout.addWidget(self.power_apply_btn)
         outer.addWidget(power)
 
-        restore = QGroupBox("Safety")
-        restore_layout = QHBoxLayout(restore)
+        helpers = QGroupBox("Quick Helpers")
+        helpers_layout = QHBoxLayout(helpers)
         self.restore_btn = QPushButton("Create Restore Point")
         self.restore_btn.setProperty("variant", "secondary")
         self.restore_btn.clicked.connect(self._confirm_restore_point)
-        restore_layout.addWidget(self.restore_btn)
-        restore_layout.addStretch(1)
-        outer.addWidget(restore)
+        self.explorer_btn = QPushButton("Restart Explorer")
+        self.explorer_btn.setProperty("variant", "secondary")
+        self.explorer_btn.clicked.connect(self._confirm_restart_explorer)
+        self.settings_combo = QComboBox()
+        self.settings_combo.addItem("Display", "display")
+        self.settings_combo.addItem("Network", "network")
+        self.settings_combo.addItem("Windows Update", "windows_update")
+        self.settings_combo.addItem("Apps", "apps")
+        self.settings_combo.addItem("Sound", "sound")
+        self.settings_btn = QPushButton("Open Settings")
+        self.settings_btn.clicked.connect(self._open_settings)
+        self.folder_combo = QComboBox()
+        self.folder_combo.addItem("Temp", "temp")
+        self.folder_combo.addItem("Downloads", "downloads")
+        self.folder_combo.addItem("Startup", "startup")
+        self.folder_combo.addItem("Local AppData", "local_appdata")
+        self.folder_combo.addItem("Recycle Bin", "recycle_bin")
+        self.folder_btn = QPushButton("Open Folder")
+        self.folder_btn.clicked.connect(self._open_folder)
+        helpers_layout.addWidget(self.restore_btn)
+        helpers_layout.addWidget(self.explorer_btn)
+        helpers_layout.addWidget(self.settings_combo, 1)
+        helpers_layout.addWidget(self.settings_btn)
+        helpers_layout.addWidget(self.folder_combo, 1)
+        helpers_layout.addWidget(self.folder_btn)
+        outer.addWidget(helpers)
 
         self.status_label = QLabel("Choose a health check to begin.")
         self.status_label.setProperty("role", "caption")
@@ -92,7 +119,9 @@ class HealthTab(QWidget):
     def _set_busy(self, busy):
         for button in (
             self.update_btn, self.disk_btn, self.events_btn, self.security_btn,
-            self.startup_btn, self.power_check_btn, self.power_apply_btn, self.restore_btn,
+            self.startup_btn, self.reboot_btn, self.battery_btn,
+            self.power_check_btn, self.power_apply_btn, self.restore_btn,
+            self.explorer_btn, self.settings_btn, self.folder_btn,
         ):
             button.setEnabled(not busy)
 
@@ -127,3 +156,20 @@ class HealthTab(QWidget):
         )
         if reply == QMessageBox.Yes:
             self._run_tool(toolbox.create_restore_point)
+
+    def _confirm_restart_explorer(self):
+        reply = QMessageBox.question(
+            self,
+            "Confirm Restart Explorer",
+            "Restart Windows Explorer? The taskbar and desktop may briefly disappear.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self._run_tool(toolbox.restart_explorer)
+
+    def _open_settings(self):
+        self._run_tool(toolbox.open_windows_settings, self.settings_combo.currentData())
+
+    def _open_folder(self):
+        self._run_tool(toolbox.open_known_folder, self.folder_combo.currentData())

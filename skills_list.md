@@ -36,9 +36,20 @@ This file documents what the PC Fix assistant can request through LLM chat. The 
 | `restart_network_adapter` | `restart_network_adapter` | Medium | Yes | Restarts one named network adapter. This can briefly disconnect the network. |
 | `check_power_plan` | `check_power_plan` | Read-only | No | Reads the active Windows power plan and available schemes. |
 | `set_power_plan` | `set_power_plan` | Low | Yes | Switches the active Windows power plan to Balanced, High Performance, or Power Saver. |
-| `review_startup_impact` | `review_startup_impact` | Read-only | No | Classifies startup entries with conservative keep/review/optional hints. It does not disable startup items. |
+| `review_startup_impact` | `review_startup_impact` | Read-only | No | Classifies startup entries with conservative keep/review/optional hints. It does not disable startup items by itself. |
 | `check_windows_security` | `check_windows_security` | Read-only | No | Reads Defender and firewall status where Windows exposes it. |
 | `scan_large_files` | `scan_large_files` | Read-only | No | Finds large files under a selected root without deleting anything. |
+| `scan_folder_sizes` | `scan_folder_sizes` | Read-only | No | Breaks down folder sizes under common user locations such as Downloads, Desktop, and Documents. It does not delete anything. |
+| `scan_duplicate_files` | `scan_duplicate_files` | Read-only | No | Finds duplicate file groups by size and content hash. Report only; it does not delete files. |
+| `end_process` | `end_process` | Medium | Yes | Ends one non-protected process by PID. Protected system processes are rejected in Python. |
+| `set_startup_item_enabled` | `set_startup_item_enabled` | Medium | Yes | Enables or disables one allowlisted startup Run value or Startup-folder shortcut after Python resolves name + source. |
+| `renew_ip_address` | `renew_ip_address` | Low | Yes | Releases and renews the Windows IP address configuration. |
+| `reset_winsock` | `reset_winsock` | Medium | Yes | Resets the Windows Winsock catalog. A reboot may be required afterward. |
+| `check_pending_reboot` | `check_pending_reboot` | Read-only | No | Checks whether Windows reports a pending reboot. |
+| `check_battery_report` | `check_battery_report` | Read-only | No | Reads laptop battery charge and capacity signals when a battery is present. |
+| `restart_explorer` | `restart_explorer` | Low | Yes | Restarts Windows Explorer to recover a frozen taskbar or desktop shell. |
+| `open_windows_settings` | `open_windows_settings` | Low | No | Opens one allowlisted Windows Settings page (`display`, `network`, `windows_update`, `apps`, `sound`). |
+| `open_known_folder` | `open_known_folder` | Low | No | Opens one allowlisted known folder (`temp`, `downloads`, `startup`, `local_appdata`, `recycle_bin`). |
 | `create_restore_point` | `create_restore_point` | Medium | Yes | Requests a Windows system restore point before higher-risk repair operations. |
 | `export_pc_report` | `export_pc_report` | Read-only | No | Writes a local diagnostic report with system summary and startup review details. |
 
@@ -75,4 +86,10 @@ Target-based examples:
 - Power plan targets: `plan_name` with `balanced`, `high_performance`, or `power_saver`.
 - Event log scan options: optional `hours`.
 - Large-file scan options: optional `root` and `min_size_mb`.
+- Folder-size scan options: optional `max_entries`.
+- Duplicate scan options: optional `min_size_mb` and `limit_groups`.
+- End process targets: required `pid` (protected processes are rejected).
+- Startup toggle targets: required `name`, `source`, and `enabled`; optional `command` when re-enabling.
+- Settings page targets: `page` with `display`, `network`, `windows_update`, `apps`, or `sound`.
+- Known folder targets: `folder` with `temp`, `downloads`, `startup`, `local_appdata`, or `recycle_bin`.
 - Restore point options: optional `description`.

@@ -5,9 +5,12 @@ from PySide6.QtGui import QShowEvent, QHideEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea,
+    QPushButton, QMessageBox, QAbstractItemView,
 )
 
 from app import system_info as sysinfo
+from app import toolbox
+from app.toolbox_widgets import ToolRunner, set_status_label
 
 _REFRESH_INTERVAL_MS = 2000
 
@@ -108,14 +111,33 @@ class DashboardTab(QWidget):
 
         procs_group = QGroupBox("Top Processes")
         procs_layout = QVBoxLayout(procs_group)
+        procs_header = QHBoxLayout()
+        self.end_process_btn = QPushButton("End Selected Process")
+        self.end_process_btn.setProperty("variant", "danger")
+        self.end_process_btn.clicked.connect(self._confirm_end_process)
+        self.process_status = QLabel("")
+        self.process_status.setProperty("role", "caption")
+        procs_header.addWidget(self.end_process_btn)
+        procs_header.addStretch(1)
+        procs_header.addWidget(self.process_status)
+        procs_layout.addLayout(procs_header)
         self.procs_table = QTableWidget(0, 4)
         self.procs_table.setHorizontalHeaderLabels(["PID", "Process", "CPU %", "Memory"])
         self.procs_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.procs_table.verticalHeader().setVisible(False)
         self.procs_table.setAlternatingRowColors(True)
         self.procs_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.procs_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.procs_table.setSelectionMode(QAbstractItemView.SingleSelection)
         procs_layout.addWidget(self.procs_table)
         outer.addWidget(procs_group, 1)
+
+        self._process_runner = ToolRunner(
+            "dashboard-tools",
+            self._set_process_busy,
+            self.process_status,
+            busy_text="Ending process...",
+        )
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
@@ -137,6 +159,48 @@ class DashboardTab(QWidget):
         self._refresh_disks()
         self._refresh_network()
         self._refresh_processes()
+
+    def _set_process_busy(self, busy):
+        self.end_process_btn.setEnabled(not busy)
+
+    def _selected_process(self):
+        row = self.procs_table.currentRow()
+        if row < 0:
+            return None
+        pid_item = self.procs_table.item(row, 0)
+        name_item = self.procs_table.item(row, 1)
+        if not pid_item:
+            return None
+        try:
+            pid = int(pid_item.text())
+        except ValueError:
+            return None
+        return {"pid": pid, "name": name_item.text() if name_item else ""}
+
+    def _confirm_end_process(self):
+        selected = self._selected_process()
+        if not selected:
+            set_status_label(self.process_status, "Select a process first.", False)
+            return
+        allowed, info = sysinfo.is_process_termination_allowed(selected["pid"], selected["name"])
+        if not allowed:
+            set_status_label(self.process_status, info, False)
+            QMessageBox.warning(self, "Protected Process", info)
+            return
+        reply = QMessageBox.question(
+            self,
+            "Confirm End Process",
+            f"End process {selected['name']} (PID {selected['pid']})?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._process_runner.start(toolbox.end_process, (selected["pid"],), self._on_end_process_result)
+
+    def _on_end_process_result(self, result):
+        set_status_label(self.process_status, result.summary, result.success)
+        self.refresh()
 
     def _refresh_cpu(self):
         cpu = sysinfo.get_cpu_stats()

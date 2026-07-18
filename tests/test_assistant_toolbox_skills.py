@@ -21,6 +21,10 @@ def test_toolbox_skills_are_documented_in_catalog():
     assert "check_windows_updates" in catalog
     assert "restart_network_adapter" in catalog
     assert "create_restore_point" in catalog
+    assert "scan_folder_sizes" in catalog
+    assert "end_process" in catalog
+    assert "reset_winsock" in catalog
+    assert "open_windows_settings" in catalog
 
 
 def test_restart_adapter_requires_adapter_name():
@@ -90,3 +94,80 @@ def test_create_restore_point_action_is_confirmed_medium_risk():
     assert action.risk == MEDIUM_RISK
     assert action.requires_confirmation is True
     assert action.payload == {"description": "Before repair"}
+
+
+def test_end_process_skill_requires_confirmation_and_rejects_protected(monkeypatch):
+    monkeypatch.setattr(
+        "app.assistant_core.sysinfo.is_process_termination_allowed",
+        lambda pid, name="": (False, "explorer.exe is protected and cannot be ended."),
+    )
+
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "end_process",
+        "arguments": {"pid": 123},
+    }, AssistantSnapshot(datetime.now()))
+
+    assert action is None
+    assert "protected" in message.lower()
+
+
+def test_end_process_skill_builds_confirmed_action(monkeypatch):
+    monkeypatch.setattr(
+        "app.assistant_core.sysinfo.is_process_termination_allowed",
+        lambda pid, name="": (True, "notepad.exe"),
+    )
+
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "end_process",
+        "arguments": {"pid": 4321},
+    }, AssistantSnapshot(datetime.now()))
+
+    assert message == ""
+    assert action.kind == "end_process"
+    assert action.risk == MEDIUM_RISK
+    assert action.requires_confirmation is True
+    assert action.payload == {"pid": 4321}
+
+
+def test_open_windows_settings_skill_rejects_unknown_page():
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "open_windows_settings",
+        "arguments": {"page": "about:blank"},
+    }, AssistantSnapshot(datetime.now()))
+
+    assert action is None
+    assert "Settings page" in message
+
+
+def test_set_startup_item_enabled_skill_payload():
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "set_startup_item_enabled",
+        "arguments": {"name": "Steam", "source": "HKCU\\...\\Run", "enabled": False},
+    }, AssistantSnapshot(datetime.now()))
+
+    assert message == ""
+    assert action.kind == "set_startup_item_enabled"
+    assert action.requires_confirmation is True
+    assert action.payload == {
+        "name": "Steam",
+        "source": "HKCU\\...\\Run",
+        "enabled": False,
+    }
+
+
+def test_scan_folder_sizes_skill_is_read_only():
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "scan_folder_sizes",
+        "arguments": {"max_entries": 12},
+    }, AssistantSnapshot(datetime.now()))
+
+    assert message == ""
+    assert action.kind == "scan_folder_sizes"
+    assert action.risk == READ_ONLY
+    assert action.requires_confirmation is False
+    assert action.payload == {"max_entries": 12}

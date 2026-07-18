@@ -70,6 +70,100 @@ def test_scan_large_files_is_read_only_and_reports_matches(tmp_path):
     assert small.exists()
 
 
+def test_scan_folder_sizes_reports_child_folders(tmp_path, monkeypatch):
+    child = tmp_path / "Videos"
+    child.mkdir()
+    (child / "clip.bin").write_bytes(b"x" * 2048)
+    monkeypatch.setattr(toolbox.sysinfo, "resolve_storage_scan_roots", lambda roots=None: [str(tmp_path)])
+
+    result = toolbox.scan_folder_sizes(roots=[tmp_path], max_entries=10)
+
+    assert result.success is True
+    assert any("Videos" in line for line in result.details)
+
+
+def test_scan_duplicate_files_groups_identical_copies(tmp_path, monkeypatch):
+    payload = b"x" * (1024 * 1024)
+    first = tmp_path / "a.bin"
+    second = tmp_path / "b.bin"
+    other = tmp_path / "c.bin"
+    first.write_bytes(payload)
+    second.write_bytes(payload)
+    other.write_bytes(b"y" * (1024 * 1024))
+    monkeypatch.setattr(toolbox.sysinfo, "resolve_storage_scan_roots", lambda roots=None: [str(tmp_path)])
+
+    result = toolbox.scan_duplicate_files(roots=[tmp_path], min_size_mb=1, limit_groups=10)
+
+    assert result.success is True
+    assert "duplicate group" in result.summary.lower()
+    assert first.exists() and second.exists() and other.exists()
+
+
+def test_end_process_rejects_protected_names(monkeypatch):
+    monkeypatch.setattr(
+        toolbox.sysinfo,
+        "terminate_process",
+        lambda pid: (False, "explorer.exe is protected and cannot be ended."),
+    )
+
+    result = toolbox.end_process(1234)
+
+    assert result.success is False
+    assert "protected" in result.summary.lower()
+
+
+def test_open_windows_settings_rejects_unknown_page(monkeypatch):
+    monkeypatch.setattr(toolbox, "is_windows", lambda: True)
+
+    result = toolbox.open_windows_settings("registry_editor")
+
+    assert result.success is False
+    assert "Unsupported" in result.summary
+
+
+def test_open_known_folder_rejects_unknown_key(monkeypatch):
+    monkeypatch.setattr(toolbox, "is_windows", lambda: True)
+
+    result = toolbox.open_known_folder("C:\\Windows\\System32")
+
+    assert result.success is False
+    assert "Unsupported" in result.summary
+
+
+def test_renew_ip_uses_fixed_ipconfig_commands(monkeypatch):
+    calls = []
+
+    def fake_run(args, timeout=30):
+        calls.append(args)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(toolbox, "is_windows", lambda: True)
+    monkeypatch.setattr(toolbox, "_run_command", fake_run)
+
+    result = toolbox.renew_ip_address()
+
+    assert result.success is True
+    assert ["ipconfig", "/release"] in calls
+    assert ["ipconfig", "/renew"] in calls
+
+
+def test_reset_winsock_uses_fixed_netsh_command(monkeypatch):
+    calls = []
+
+    def fake_run(args, timeout=30):
+        calls.append(args)
+        return 0, "reset ok", ""
+
+    monkeypatch.setattr(toolbox, "is_windows", lambda: True)
+    monkeypatch.setattr(toolbox, "_run_command", fake_run)
+
+    result = toolbox.reset_winsock()
+
+    assert result.success is True
+    assert ["netsh", "winsock", "reset"] in calls
+    assert any("reboot" in line.lower() for line in result.details)
+
+
 def test_tool_history_records_result():
     tool_history.clear()
     result = toolbox.ToolResult(True, "Check", "All good", ["detail"])

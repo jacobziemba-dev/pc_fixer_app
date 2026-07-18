@@ -3,9 +3,8 @@ from datetime import datetime
 from PySide6.QtCore import QTimer, QThread, Signal, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QInputDialog,
-    QSplitter, QAbstractItemView,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
+    QFrame, QMessageBox, QInputDialog, QSplitter, QScrollArea,
 )
 
 from app import window_layouts
@@ -201,114 +200,178 @@ class LayoutPreviewCanvas(QWidget):
         painter.restore()
 
 
+def _clear_layout(layout):
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget is not None:
+            widget.deleteLater()
+        elif item.layout() is not None:
+            _clear_layout(item.layout())
+
+
+def _build_context_row(primary_text, secondary_text="", meta_text="", trailing=None):
+    row = QFrame()
+    row.setProperty("role", "context-row")
+    row_layout = QHBoxLayout(row)
+    row_layout.setContentsMargins(4, 10, 4, 10)
+    row_layout.setSpacing(10)
+
+    text_col = QVBoxLayout()
+    text_col.setSpacing(2)
+    primary = QLabel(primary_text)
+    primary.setProperty("role", "snapshot-key")
+    primary.setWordWrap(True)
+    text_col.addWidget(primary)
+    if secondary_text:
+        secondary = QLabel(secondary_text)
+        secondary.setProperty("role", "caption")
+        secondary.setWordWrap(True)
+        text_col.addWidget(secondary)
+    row_layout.addLayout(text_col, 1)
+
+    if meta_text:
+        meta = QLabel(meta_text)
+        meta.setProperty("role", "caption")
+        meta.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        row_layout.addWidget(meta)
+
+    if trailing is not None:
+        row_layout.addWidget(trailing)
+
+    return row
+
+
+def _empty_row(message):
+    row = QFrame()
+    row.setProperty("role", "context-row")
+    row_layout = QHBoxLayout(row)
+    row_layout.setContentsMargins(4, 14, 4, 14)
+    label = QLabel(message)
+    label.setProperty("role", "caption")
+    label.setWordWrap(True)
+    row_layout.addWidget(label)
+    return row
+
+
+def _rows_card():
+    card = QFrame()
+    card.setProperty("role", "context-rows")
+    card_layout = QVBoxLayout(card)
+    card_layout.setContentsMargins(10, 6, 10, 6)
+    card_layout.setSpacing(0)
+    rows_layout = QVBoxLayout()
+    rows_layout.setSpacing(0)
+    card_layout.addLayout(rows_layout)
+    return card, rows_layout
+
+
+def _layout_meta_text(layout):
+    windows = layout.get("windows", [])
+    displays = layout.get("displays", []) or window_layouts.displays_from_windows(windows)
+    parts = [f"{len(windows)} window(s)", f"{len(displays)} display(s)"]
+    updated = layout.get("updated_at", "")
+    if updated:
+        parts.append(f"Updated {updated}")
+    return " · ".join(parts)
+
+
+class LayoutCard(QFrame):
+    def __init__(self, layout, on_select, on_load, on_delete):
+        super().__init__()
+        self._layout = layout
+        self._on_select = on_select
+        self._on_load = on_load
+        self._on_delete = on_delete
+        self.setProperty("role", "layout-card")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumWidth(230)
+        self.setMaximumWidth(300)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setSpacing(10)
+
+        self.thumb = LayoutPreviewCanvas(layout)
+        self.thumb.setFixedSize(240, 128)
+        outer.addWidget(self.thumb)
+
+        title = QLabel(layout.get("name", "Untitled Layout"))
+        title.setProperty("role", "layout-card-title")
+        title.setWordWrap(True)
+        outer.addWidget(title)
+
+        meta = QLabel(_layout_meta_text(layout))
+        meta.setProperty("role", "caption")
+        meta.setWordWrap(True)
+        outer.addWidget(meta)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        self.load_btn = QPushButton("Load")
+        self.load_btn.setProperty("variant", "action-confirm")
+        self.load_btn.clicked.connect(self._handle_load)
+        self.delete_btn = QPushButton("Delete")
+        self.delete_btn.setProperty("variant", "card-danger")
+        self.delete_btn.clicked.connect(self._handle_delete)
+        actions.addWidget(self.load_btn)
+        actions.addWidget(self.delete_btn)
+        actions.addStretch(1)
+        outer.addLayout(actions)
+
+    def layout_id(self):
+        return self._layout.get("id", "")
+
+    def set_selected(self, selected):
+        state = "selected" if selected else ""
+        if self.property("state") == state:
+            return
+        self.setProperty("state", state)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def set_busy(self, busy):
+        self.load_btn.setEnabled(not busy)
+        self.delete_btn.setEnabled(not busy)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._on_select(self._layout)
+        super().mousePressEvent(event)
+
+    def _handle_load(self):
+        self._on_load(self._layout)
+
+    def _handle_delete(self):
+        self._on_delete(self._layout)
+
+
 class LayoutsTab(QWidget):
     REFRESH_INTERVAL_MS = 5000
+    GALLERY_COLUMNS = 2
 
     def __init__(self):
         super().__init__()
         outer = QVBoxLayout(self)
 
         header_layout = QHBoxLayout()
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
         title = QLabel("Layouts")
         title.setProperty("role", "heading")
+        title_col.addWidget(title)
+        subtitle = QLabel("Save and restore your window arrangements across displays.")
+        subtitle.setProperty("role", "caption")
+        title_col.addWidget(subtitle)
+        header_layout.addLayout(title_col)
+        header_layout.addStretch(1)
         self.save_btn = QPushButton("Save Current Layout")
         self.save_btn.clicked.connect(self.save_current_layout)
-        header_layout.addWidget(title)
-        header_layout.addStretch(1)
-        header_layout.addWidget(self.save_btn)
+        header_layout.addWidget(self.save_btn, 0, Qt.AlignTop)
         outer.addLayout(header_layout)
 
-        desktop_group = QGroupBox("Current Desktop")
-        desktop_layout = QVBoxLayout(desktop_group)
-        desktop_splitter = QSplitter(Qt.Horizontal)
-
-        preview_group = QGroupBox("Live Preview")
-        preview_layout = QVBoxLayout(preview_group)
-        self.preview = LayoutPreviewCanvas()
-        preview_layout.addWidget(self.preview)
-
-        apps_group = QGroupBox("Current Apps")
-        apps_layout = QVBoxLayout(apps_group)
-        self.current_apps_table = QTableWidget(0, 4)
-        self.current_apps_table.setHorizontalHeaderLabels(["App", "Window", "Display", "Position"])
-        self.current_apps_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.current_apps_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.current_apps_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.current_apps_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.current_apps_table.verticalHeader().setVisible(False)
-        self.current_apps_table.setAlternatingRowColors(True)
-        self.current_apps_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.current_apps_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.current_apps_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.current_apps_table.itemSelectionChanged.connect(self._update_current_app_actions)
-        apps_layout.addWidget(self.current_apps_table)
-
-        app_actions = QHBoxLayout()
-        self.remove_app_btn = QPushButton("Remove")
-        self.remove_app_btn.setProperty("variant", "secondary")
-        self.remove_app_btn.clicked.connect(self.remove_selected_current_app)
-        self.show_all_btn = QPushButton("Show All")
-        self.show_all_btn.setProperty("variant", "secondary")
-        self.show_all_btn.clicked.connect(self.restore_removed_apps)
-        app_actions.addWidget(self.remove_app_btn)
-        app_actions.addWidget(self.show_all_btn)
-        app_actions.addStretch(1)
-        apps_layout.addLayout(app_actions)
-
-        desktop_splitter.addWidget(preview_group)
-        desktop_splitter.addWidget(apps_group)
-        desktop_splitter.setStretchFactor(0, 3)
-        desktop_splitter.setStretchFactor(1, 1)
-        desktop_layout.addWidget(desktop_splitter)
-        outer.addWidget(desktop_group, 2)
-
-        splitter = QSplitter(Qt.Horizontal)
-
-        layouts_group = QGroupBox("Saved Layouts")
-        layouts_layout = QVBoxLayout(layouts_group)
-        self.layouts_table = QTableWidget(0, 4)
-        self.layouts_table.setHorizontalHeaderLabels(["Name", "Windows", "Displays", "Updated"])
-        self.layouts_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.layouts_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.layouts_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.layouts_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.layouts_table.verticalHeader().setVisible(False)
-        self.layouts_table.setAlternatingRowColors(True)
-        self.layouts_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.layouts_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.layouts_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.layouts_table.itemSelectionChanged.connect(self._on_layout_selected)
-        layouts_layout.addWidget(self.layouts_table)
-
-        layout_actions = QHBoxLayout()
-        self.load_layout_btn = QPushButton("Load Layout")
-        self.load_layout_btn.clicked.connect(self.load_selected_layout)
-        self.delete_layout_btn = QPushButton("Delete")
-        self.delete_layout_btn.setProperty("variant", "danger")
-        self.delete_layout_btn.clicked.connect(self.delete_selected_layout)
-        layout_actions.addStretch(1)
-        layout_actions.addWidget(self.load_layout_btn)
-        layout_actions.addWidget(self.delete_layout_btn)
-        layouts_layout.addLayout(layout_actions)
-
-        windows_group = QGroupBox("Layout Windows")
-        windows_layout = QVBoxLayout(windows_group)
-        self.windows_table = QTableWidget(0, 4)
-        self.windows_table.setHorizontalHeaderLabels(["App", "Window", "Display", "Position"])
-        self.windows_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.windows_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.windows_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.windows_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.windows_table.verticalHeader().setVisible(False)
-        self.windows_table.setAlternatingRowColors(True)
-        self.windows_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        windows_layout.addWidget(self.windows_table)
-
-        splitter.addWidget(layouts_group)
-        splitter.addWidget(windows_group)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
-        outer.addWidget(splitter, 1)
+        outer.addWidget(self._build_desktop_panel(), 2)
+        outer.addWidget(self._build_saved_layouts_panel(), 3)
 
         self.status_label = QLabel("")
         self.status_label.setProperty("role", "caption")
@@ -326,6 +389,10 @@ class LayoutsTab(QWidget):
         self._visible_current_items = []
         self._current_signature = None
         self._resume_refresh_after_apply = False
+        self._selected_layout_id = ""
+        self._layout_cards = []
+        self._current_row_remove_buttons = []
+        self._busy = False
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(self.REFRESH_INTERVAL_MS)
@@ -333,6 +400,111 @@ class LayoutsTab(QWidget):
 
         self.load()
         QTimer.singleShot(0, self.refresh_current_layout)
+
+    def _build_desktop_panel(self):
+        panel = QFrame()
+        panel.setProperty("role", "snapshot-panel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(16, 14, 16, 16)
+        panel_layout.setSpacing(10)
+
+        eyebrow = QLabel("CURRENT DESKTOP")
+        eyebrow.setProperty("role", "eyebrow")
+        panel_layout.addWidget(eyebrow)
+
+        splitter = QSplitter(Qt.Horizontal)
+
+        preview_col = QWidget()
+        preview_layout = QVBoxLayout(preview_col)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(6)
+        preview_title = QLabel("Live Preview")
+        preview_title.setProperty("role", "caption")
+        preview_layout.addWidget(preview_title)
+        self.preview = LayoutPreviewCanvas()
+        preview_layout.addWidget(self.preview)
+
+        apps_col = QWidget()
+        apps_layout = QVBoxLayout(apps_col)
+        apps_layout.setContentsMargins(0, 0, 0, 0)
+        apps_layout.setSpacing(6)
+        apps_header = QHBoxLayout()
+        apps_title = QLabel("Current Apps")
+        apps_title.setProperty("role", "caption")
+        apps_header.addWidget(apps_title)
+        apps_header.addStretch(1)
+        self.show_all_btn = QPushButton("Show All")
+        self.show_all_btn.setProperty("variant", "secondary")
+        self.show_all_btn.clicked.connect(self.restore_removed_apps)
+        apps_header.addWidget(self.show_all_btn)
+        apps_layout.addLayout(apps_header)
+
+        apps_scroll = QScrollArea()
+        apps_scroll.setWidgetResizable(True)
+        apps_scroll.setFrameShape(QFrame.NoFrame)
+        apps_rows_card, self.current_apps_rows = _rows_card()
+        apps_scroll.setWidget(apps_rows_card)
+        apps_layout.addWidget(apps_scroll, 1)
+
+        splitter.addWidget(preview_col)
+        splitter.addWidget(apps_col)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        panel_layout.addWidget(splitter, 1)
+        return panel
+
+    def _build_saved_layouts_panel(self):
+        panel = QFrame()
+        panel.setProperty("role", "snapshot-panel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(16, 14, 16, 16)
+        panel_layout.setSpacing(10)
+
+        eyebrow = QLabel("SAVED LAYOUTS")
+        eyebrow.setProperty("role", "eyebrow")
+        panel_layout.addWidget(eyebrow)
+
+        splitter = QSplitter(Qt.Horizontal)
+
+        gallery_col = QWidget()
+        gallery_layout = QVBoxLayout(gallery_col)
+        gallery_layout.setContentsMargins(0, 0, 0, 0)
+        gallery_layout.setSpacing(8)
+        self.gallery_scroll = QScrollArea()
+        self.gallery_scroll.setWidgetResizable(True)
+        self.gallery_scroll.setFrameShape(QFrame.NoFrame)
+        gallery_inner = QWidget()
+        self.gallery_grid = QGridLayout(gallery_inner)
+        self.gallery_grid.setSpacing(14)
+        self.gallery_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.gallery_scroll.setWidget(gallery_inner)
+        gallery_layout.addWidget(self.gallery_scroll)
+        self.empty_layouts_label = QLabel("No saved layouts yet. Save your current desktop to create one.")
+        self.empty_layouts_label.setProperty("role", "caption")
+        self.empty_layouts_label.setAlignment(Qt.AlignCenter)
+        self.empty_layouts_label.setWordWrap(True)
+        gallery_layout.addWidget(self.empty_layouts_label)
+
+        windows_col = QWidget()
+        windows_layout = QVBoxLayout(windows_col)
+        windows_layout.setContentsMargins(0, 0, 0, 0)
+        windows_layout.setSpacing(6)
+        windows_title = QLabel("Layout Windows")
+        windows_title.setProperty("role", "caption")
+        windows_layout.addWidget(windows_title)
+        windows_scroll = QScrollArea()
+        windows_scroll.setWidgetResizable(True)
+        windows_scroll.setFrameShape(QFrame.NoFrame)
+        windows_rows_card, self.layout_windows_rows = _rows_card()
+        windows_scroll.setWidget(windows_rows_card)
+        windows_layout.addWidget(windows_scroll, 1)
+
+        splitter.addWidget(gallery_col)
+        splitter.addWidget(windows_col)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 1)
+        panel_layout.addWidget(splitter, 1)
+        return panel
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -371,20 +543,6 @@ class LayoutsTab(QWidget):
         self._active_save_name = name
         self._start_scan("save")
 
-    def remove_selected_current_app(self):
-        selected = self.current_apps_table.selectionModel().selectedRows()
-        if not selected:
-            return
-        row = selected[0].row()
-        if row < 0 or row >= len(self._visible_current_items):
-            return
-        item = self._visible_current_items[row]
-        self._removed_current_keys.add(self._current_item_key(item))
-        self._refresh_current_preview()
-        self.status_label.setText(
-            f"Removed \"{window_layouts.saved_window_label(item)}\" from the current layout draft."
-        )
-
     def restore_removed_apps(self):
         if not self._removed_current_keys:
             return
@@ -392,10 +550,23 @@ class LayoutsTab(QWidget):
         self._refresh_current_preview()
         self.status_label.setText("Restored all open apps to the current layout draft.")
 
-    def load_selected_layout(self):
-        layout = self._selected_layout()
-        if not layout:
+    def _remove_current_app(self, item):
+        self._removed_current_keys.add(self._current_item_key(item))
+        self._refresh_current_preview()
+        self.status_label.setText(
+            f"Removed \"{window_layouts.saved_window_label(item)}\" from the current layout draft."
+        )
+
+    def _select_layout(self, layout):
+        layout_id = layout.get("id", "")
+        if layout_id == self._selected_layout_id:
             return
+        self._selected_layout_id = layout_id
+        for card in self._layout_cards:
+            card.set_selected(card.layout_id() == layout_id)
+        self._render_layout_windows()
+
+    def _load_layout(self, layout):
         if self._scan_worker and self._scan_worker.isRunning():
             self.status_label.setText("Waiting for the current scan to finish before loading a layout.")
             return
@@ -425,11 +596,8 @@ class LayoutsTab(QWidget):
 
         self._start_apply_layout(dict(layout))
 
-    def delete_selected_layout(self):
-        index = self._selected_layout_index()
-        layout = self._selected_layout()
-        if index < 0 or not layout:
-            return
+    def _delete_layout(self, layout):
+        layout_id = layout.get("id", "")
         name = layout.get("name", "this layout")
         was_refreshing = self._refresh_timer.isActive()
         self._refresh_timer.stop()
@@ -444,13 +612,11 @@ class LayoutsTab(QWidget):
             self._refresh_timer.start()
         if reply != QMessageBox.Yes:
             return
-        del self._layouts[index]
+        self._layouts = [item for item in self._layouts if item.get("id") != layout_id]
         window_layouts.save_layouts(self._layouts)
-        next_id = ""
-        if self._layouts:
-            next_index = min(index, len(self._layouts) - 1)
-            next_id = self._layouts[next_index].get("id", "")
-        self._render_layouts(select_id=next_id)
+        if self._selected_layout_id == layout_id:
+            self._selected_layout_id = ""
+        self._render_layouts()
         self.status_label.setText(f"Deleted \"{name}\".")
 
     def _start_scan(self, purpose):
@@ -570,45 +736,39 @@ class LayoutsTab(QWidget):
             f"Saved \"{layout.get('name')}\" with {len(items)} window(s) on {len(displays)} display(s)."
         )
 
-    def _selected_layout_index(self):
-        selected = self.layouts_table.selectionModel().selectedRows()
-        if not selected:
-            return -1
-        return selected[0].row()
-
-    def _selected_layout(self):
-        index = self._selected_layout_index()
-        if index < 0 or index >= len(self._layouts):
-            return None
-        return self._layouts[index]
+    def _find_layout(self, layout_id):
+        return next((item for item in self._layouts if item.get("id") == layout_id), None)
 
     def _render_layouts(self, select_id=""):
-        current = self._selected_layout()
-        current_id = select_id or (current.get("id") if current else "")
-        self.layouts_table.setRowCount(len(self._layouts))
-        selected_row = 0 if self._layouts else -1
-        for row, layout in enumerate(self._layouts):
-            if layout.get("id") == current_id:
-                selected_row = row
-            displays = layout.get("displays", []) or window_layouts.displays_from_windows(layout.get("windows", []))
-            self.layouts_table.setItem(row, 0, QTableWidgetItem(layout.get("name", "Untitled Layout")))
-            self.layouts_table.setItem(row, 1, QTableWidgetItem(str(len(layout.get("windows", [])))))
-            self.layouts_table.setItem(row, 2, QTableWidgetItem(str(len(displays))))
-            self.layouts_table.setItem(row, 3, QTableWidgetItem(layout.get("updated_at", "")))
-        if selected_row >= 0:
-            self.layouts_table.selectRow(selected_row)
-        self._on_layout_selected()
+        if select_id:
+            self._selected_layout_id = select_id
+        elif self._selected_layout_id and not self._find_layout(self._selected_layout_id):
+            self._selected_layout_id = ""
+        if not self._selected_layout_id and self._layouts:
+            self._selected_layout_id = self._layouts[0].get("id", "")
 
-    def _on_layout_selected(self):
-        self._render_windows(self._selected_layout())
-        has_layout = self._selected_layout() is not None
-        self.load_layout_btn.setEnabled(has_layout)
-        self.delete_layout_btn.setEnabled(has_layout)
+        _clear_layout(self.gallery_grid)
+        self._layout_cards = []
+        for index, layout in enumerate(self._layouts):
+            card = LayoutCard(layout, self._select_layout, self._load_layout, self._delete_layout)
+            card.set_selected(layout.get("id", "") == self._selected_layout_id)
+            card.set_busy(self._busy)
+            self.gallery_grid.addWidget(card, index // self.GALLERY_COLUMNS, index % self.GALLERY_COLUMNS)
+            self._layout_cards.append(card)
+        self.gallery_scroll.setVisible(bool(self._layouts))
+        self.empty_layouts_label.setVisible(not self._layouts)
 
-    def _render_windows(self, layout):
+        self._render_layout_windows()
+
+    def _render_layout_windows(self):
+        layout = self._find_layout(self._selected_layout_id)
+        _clear_layout(self.layout_windows_rows)
         windows = layout.get("windows", []) if layout else []
-        self.windows_table.setRowCount(len(windows))
-        for row, item in enumerate(windows):
+        if not windows:
+            message = "This layout has no saved windows." if layout else "Select a saved layout to see its windows."
+            self.layout_windows_rows.addWidget(_empty_row(message))
+            return
+        for item in windows:
             app_name = item.get("process_name") or item.get("exe_path") or "Unknown app"
             title = item.get("title") or "Untitled window"
             rect = item.get("window_rect", {})
@@ -617,11 +777,9 @@ class LayoutsTab(QWidget):
                 f"{window_layouts.rect_width(rect)} x {window_layouts.rect_height(rect)}"
                 if window_layouts.is_rect(rect) else ""
             )
-            self.windows_table.setItem(row, 0, QTableWidgetItem(app_name))
-            self.windows_table.setItem(row, 1, QTableWidgetItem(title))
-            self.windows_table.setItem(row, 2, QTableWidgetItem(item.get("monitor_device", "")))
-            self.windows_table.setItem(row, 3, QTableWidgetItem(position))
-        self.windows_table.resizeRowsToContents()
+            secondary = f"{title} — {position}" if position else title
+            meta = item.get("monitor_device", "")
+            self.layout_windows_rows.addWidget(_build_context_row(app_name, secondary, meta))
 
     def _refresh_current_preview(self):
         included = self._included_current_items()
@@ -667,56 +825,37 @@ class LayoutsTab(QWidget):
         )
 
     def _render_current_apps(self, items):
-        selected_key, selected_identity = self._selected_current_app_keys()
         self._visible_current_items = list(items)
-        self.current_apps_table.blockSignals(True)
-        self.current_apps_table.setRowCount(len(items))
-        selected_row = -1
-        for row, item in enumerate(items):
-            app_name = item.get("process_name") or item.get("exe_path") or "Unknown app"
-            title = item.get("title") or "Untitled window"
-            rect = item.get("window_rect", {})
-            position = (
-                f"{rect.get('left', '?')}, {rect.get('top', '?')} - "
-                f"{window_layouts.rect_width(rect)} x {window_layouts.rect_height(rect)}"
-                if window_layouts.is_rect(rect) else ""
-            )
-            self.current_apps_table.setItem(row, 0, QTableWidgetItem(app_name))
-            self.current_apps_table.setItem(row, 1, QTableWidgetItem(title))
-            self.current_apps_table.setItem(row, 2, QTableWidgetItem(item.get("monitor_device", "")))
-            self.current_apps_table.setItem(row, 3, QTableWidgetItem(position))
-            if self._current_item_key(item) == selected_key:
-                selected_row = row
-            elif selected_row < 0 and window_layouts.layout_item_identity_key(item) == selected_identity:
-                selected_row = row
-        if selected_row >= 0:
-            self.current_apps_table.selectRow(selected_row)
+        _clear_layout(self.current_apps_rows)
+        self._current_row_remove_buttons = []
+        if not items:
+            self.current_apps_rows.addWidget(_empty_row("No open app windows detected."))
         else:
-            self.current_apps_table.clearSelection()
-        self.current_apps_table.blockSignals(False)
-        self.current_apps_table.resizeRowsToContents()
-        self._update_current_app_actions()
-
-    def _selected_current_app_keys(self):
-        selected = self.current_apps_table.selectionModel().selectedRows()
-        if not selected:
-            return None, None
-        row = selected[0].row()
-        if row < 0 or row >= len(self._visible_current_items):
-            return None, None
-        item = self._visible_current_items[row]
-        return self._current_item_key(item), window_layouts.layout_item_identity_key(item)
-
-    def _update_current_app_actions(self):
-        has_selection = bool(self.current_apps_table.selectionModel().selectedRows())
-        self.remove_app_btn.setEnabled(has_selection)
+            for item in items:
+                app_name = item.get("process_name") or item.get("exe_path") or "Unknown app"
+                title = item.get("title") or "Untitled window"
+                rect = item.get("window_rect", {})
+                position = (
+                    f"{rect.get('left', '?')}, {rect.get('top', '?')} - "
+                    f"{window_layouts.rect_width(rect)} x {window_layouts.rect_height(rect)}"
+                    if window_layouts.is_rect(rect) else ""
+                )
+                secondary = f"{title} — {position}" if position else title
+                meta = item.get("monitor_device", "")
+                remove_btn = QPushButton("✕")
+                remove_btn.setProperty("variant", "row-remove")
+                remove_btn.setFixedWidth(30)
+                remove_btn.setEnabled(not self._busy)
+                remove_btn.clicked.connect(lambda checked=False, item=item: self._remove_current_app(item))
+                row = _build_context_row(app_name, secondary, meta, trailing=remove_btn)
+                self.current_apps_rows.addWidget(row)
+                self._current_row_remove_buttons.append(remove_btn)
         self.show_all_btn.setEnabled(bool(self._removed_current_keys))
 
     def _set_busy(self, busy):
+        self._busy = busy
         self.save_btn.setEnabled(not busy)
-        self.load_layout_btn.setEnabled(not busy and self._selected_layout() is not None)
-        self.delete_layout_btn.setEnabled(not busy and self._selected_layout() is not None)
-        if busy:
-            self.remove_app_btn.setEnabled(False)
-        else:
-            self._update_current_app_actions()
+        for card in self._layout_cards:
+            card.set_busy(busy)
+        for btn in self._current_row_remove_buttons:
+            btn.setEnabled(not busy)

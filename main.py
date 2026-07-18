@@ -203,6 +203,7 @@ class MainWindow(QMainWindow):
             (0, "Dashboard"),
             (3, "Cleanup"),
             (9, "Startup"),
+            (8, "Layouts"),
             (2, "Tools"),
             (11, "Settings"),
         ):

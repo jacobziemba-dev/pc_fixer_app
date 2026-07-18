@@ -1401,27 +1401,37 @@ SKILL_DOMAIN_KEYWORDS = {
     "network": (
         "network", "internet", "wifi", "wi-fi", "ethernet", "dns", "adapter",
         "ip", "winsock", "ping", "gateway", "offline", "connection",
-        "ports", "listening",
+        "ports", "listening", "proxy", "signal", "latency",
     ),
     "display": ("display", "monitor", "refresh rate", "screen", "hz", "resolution"),
-    "audio": ("audio", "sound", "speaker", "volume", "mute", "route", "headphones"),
+    "audio": (
+        "audio", "sound", "speaker", "volume", "mute", "muted", "unmute",
+        "route", "headphones", "headset",
+    ),
     "layouts": ("layout", "layouts", "arrange", "snap window", "window layout", "desktop layout"),
-    "startup": ("startup", "boot", "launch on start", "startup apps", "startup programs"),
+    "startup": ("startup", "boot", "booting", "launch on start", "startup apps", "startup programs"),
     "storage": (
         "storage", "disk", "drive", "large file", "large files", "duplicate",
         "folder size", "downloads", "desktop files", "space", "chkdsk", "free space",
+        "ssd", "hdd", "smart status",
     ),
-    "cleanup": ("clean", "cleanup", "junk", "temp", "cache", "recycle", "free space", "disk cleanup"),
+    "cleanup": (
+        "clean", "cleaning", "cleanup", "junk", "temp", "cache", "recycle",
+        "free space", "free up", "disk cleanup",
+    ),
     "power": ("power", "battery", "power plan", "performance plan", "power saver"),
     "security": (
-        "security", "defender", "firewall", "update", "updates", "event log", "errors",
-        "sfc", "dism", "shutdown", "unexpected",
+        "security", "defender", "firewall", "update", "updates", "event log", "error",
+        "sfc", "dism", "shutdown", "unexpected", "virus", "malware", "antivirus",
     ),
     "hardware": (
         "hardware", "gpu", "cpu", "bios", "motherboard", "specs", "uptime",
-        "memory pressure", "usb", "bluetooth",
+        "memory", "memory pressure", "ram", "usb", "bluetooth",
     ),
-    "process": ("process", "processes", "task manager", "end process", "kill", "cpu hog"),
+    "process": (
+        "process", "processes", "task manager", "end process", "kill",
+        "cpu hog", "frozen", "not responding", "hung",
+    ),
     "system": (
         "settings", "task manager", "resource monitor", "device manager",
         "explorer", "restore point", "open folder", "printer", "spooler",

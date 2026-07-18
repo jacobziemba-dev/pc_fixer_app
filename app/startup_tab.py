@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QLineEdit, QSplitter,
-    QMessageBox, QAbstractItemView,
+    QMessageBox,
 )
 from PySide6.QtCore import Qt, QThread, Signal
 
@@ -9,6 +9,7 @@ from app import system_info as sysinfo
 from app import toolbox
 from app.job_queue import get_job_queue
 from app.toolbox_widgets import ToolWorker, set_status_label
+from app.ui_kit import build_context_row, clear_layout, empty_row, rows_card, section_panel
 
 
 class NumericTableWidgetItem(QTableWidgetItem):
@@ -55,37 +56,15 @@ class StartupTab(QWidget):
 
         splitter = QSplitter(Qt.Vertical)
 
-        startup_group = QGroupBox("Programs That Launch at Startup")
-        startup_layout = QVBoxLayout(startup_group)
-        actions = QHBoxLayout()
-        self.disable_btn = QPushButton("Disable Selected")
-        self.disable_btn.setProperty("variant", "danger")
-        self.disable_btn.clicked.connect(lambda: self._confirm_toggle(False))
-        self.enable_btn = QPushButton("Enable Selected")
-        self.enable_btn.clicked.connect(lambda: self._confirm_toggle(True))
-        actions.addWidget(self.disable_btn)
-        actions.addWidget(self.enable_btn)
-        actions.addStretch(1)
-        startup_layout.addLayout(actions)
-        self.startup_table = QTableWidget(0, 4)
-        self.startup_table.setHorizontalHeaderLabels(["Name", "Command / Location", "Source", "State"])
-        self.startup_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.startup_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.startup_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.startup_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.startup_table.verticalHeader().setVisible(False)
-        self.startup_table.setAlternatingRowColors(True)
-        self.startup_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.startup_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.startup_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        startup_layout.addWidget(self.startup_table)
+        startup_panel, startup_body = section_panel("PROGRAMS THAT LAUNCH AT STARTUP")
+        startup_card, self.startup_rows = rows_card()
+        startup_body.addWidget(startup_card)
 
-        programs_group = QGroupBox("Installed Programs")
-        programs_layout = QVBoxLayout(programs_group)
+        programs_panel, programs_body = section_panel("INSTALLED PROGRAMS")
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Filter by name or publisher...")
         self.search_box.textChanged.connect(self._apply_filter)
-        programs_layout.addWidget(self.search_box)
+        programs_body.addWidget(self.search_box)
         self.programs_table = QTableWidget(0, 4)
         self.programs_table.setHorizontalHeaderLabels(["Name", "Version", "Publisher", "Size"])
         self.programs_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
@@ -96,21 +75,23 @@ class StartupTab(QWidget):
         self.programs_table.setAlternatingRowColors(True)
         self.programs_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.programs_table.setSortingEnabled(True)
-        programs_layout.addWidget(self.programs_table)
+        programs_body.addWidget(self.programs_table)
 
-        splitter.addWidget(startup_group)
-        splitter.addWidget(programs_group)
+        splitter.addWidget(startup_panel)
+        splitter.addWidget(programs_panel)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
         outer.addWidget(splitter, 1)
 
         self._all_programs = []
         self._startup_items = []
+        self._startup_action_buttons = []
         self._reload_after_action = False
         self.load()
 
     def _set_busy(self, busy):
-        for button in (self.refresh_btn, self.disable_btn, self.enable_btn):
+        self.refresh_btn.setEnabled(not busy)
+        for button in self._startup_action_buttons:
             button.setEnabled(not busy)
 
     def load(self):
@@ -148,26 +129,25 @@ class StartupTab(QWidget):
         )
 
     def _populate_startup_items(self, items):
-        self.startup_table.setSortingEnabled(False)
-        self.startup_table.setRowCount(len(items))
-        for row, item in enumerate(items):
-            self.startup_table.setItem(row, 0, QTableWidgetItem(item["name"]))
-            self.startup_table.setItem(row, 1, QTableWidgetItem(str(item.get("command", ""))))
-            self.startup_table.setItem(row, 2, QTableWidgetItem(item.get("source", "")))
-            state = "Enabled" if item.get("enabled", True) else "Disabled"
-            self.startup_table.setItem(row, 3, QTableWidgetItem(state))
-
-    def _selected_startup_item(self):
-        row = self.startup_table.currentRow()
-        if row < 0 or row >= len(self._startup_items):
-            return None
-        return self._startup_items[row]
-
-    def _confirm_toggle(self, enabled):
-        item = self._selected_startup_item()
-        if not item:
-            set_status_label(self.status_label, "Select a startup item first.", False)
+        clear_layout(self.startup_rows)
+        self._startup_action_buttons = []
+        if not items:
+            self.startup_rows.addWidget(empty_row("No startup items found."))
             return
+        for item in items:
+            enabled = item.get("enabled", True)
+            state = "Enabled" if enabled else "Disabled"
+            action_btn = QPushButton("Disable" if enabled else "Enable")
+            action_btn.setProperty("variant", "card-danger" if enabled else "action-confirm")
+            action_btn.clicked.connect(
+                lambda checked=False, item=item, enabled=enabled: self._confirm_toggle(item, not enabled)
+            )
+            secondary = f"{item.get('command', '')} · {item.get('source', '')}"
+            row = build_context_row(item["name"], secondary, state, trailing=action_btn)
+            self.startup_rows.addWidget(row)
+            self._startup_action_buttons.append(action_btn)
+
+    def _confirm_toggle(self, item, enabled):
         verb = "enable" if enabled else "disable"
         reply = QMessageBox.question(
             self,

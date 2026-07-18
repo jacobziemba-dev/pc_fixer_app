@@ -3,14 +3,14 @@ import time
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QShowEvent, QHideEvent
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea,
-    QPushButton, QMessageBox, QAbstractItemView,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QLabel,
+    QProgressBar, QScrollArea, QPushButton, QMessageBox,
 )
 
 from app import system_info as sysinfo
 from app import toolbox
 from app.toolbox_widgets import ToolRunner, set_status_label
+from app.ui_kit import build_context_row, clear_layout, empty_row, rows_card, section_panel
 
 _REFRESH_INTERVAL_MS = 2000
 
@@ -32,21 +32,16 @@ def _set_bar_level(bar, percent):
     bar.style().polish(bar)
 
 
-def _set_table_cell(table, row, col, text, user_data=None):
-    item = table.item(row, col)
-    if item is None:
-        item = QTableWidgetItem(text)
-        table.setItem(row, col, item)
-    else:
-        item.setText(text)
-    if user_data is not None:
-        item.setData(Qt.UserRole, user_data)
-
-
-class MetricCard(QGroupBox):
+class MetricCard(QFrame):
     def __init__(self, title):
-        super().__init__(title)
+        super().__init__()
+        self.setProperty("role", "snapshot-panel")
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setSpacing(8)
+        eyebrow = QLabel(title.upper())
+        eyebrow.setProperty("role", "eyebrow")
+        layout.addWidget(eyebrow)
         self.value_label = QLabel("--")
         self.value_label.setProperty("role", "metric")
         self.caption_label = QLabel("")
@@ -85,53 +80,35 @@ class DashboardTab(QWidget):
 
         mid_layout = QHBoxLayout()
 
-        cores_group = QGroupBox("CPU Cores")
-        self.cores_layout = QVBoxLayout(cores_group)
+        cores_panel, cores_body = section_panel("CPU CORES")
         cores_scroll = QScrollArea()
         cores_scroll.setWidgetResizable(True)
         cores_inner = QWidget()
         self.cores_grid = QGridLayout(cores_inner)
         cores_scroll.setWidget(cores_inner)
-        self.cores_layout.addWidget(cores_scroll)
+        cores_body.addWidget(cores_scroll)
         self._core_bars = []
 
-        disks_group = QGroupBox("Storage Drives")
-        disks_layout = QVBoxLayout(disks_group)
-        self.disks_table = QTableWidget(0, 4)
-        self.disks_table.setHorizontalHeaderLabels(["Drive", "Used", "Free", "Usage"])
-        self.disks_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.disks_table.verticalHeader().setVisible(False)
-        self.disks_table.setAlternatingRowColors(True)
-        self.disks_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        disks_layout.addWidget(self.disks_table)
+        disks_panel, disks_body = section_panel("STORAGE DRIVES")
+        disks_card, self.disks_rows = rows_card()
+        disks_body.addWidget(disks_card)
 
-        mid_layout.addWidget(cores_group, 1)
-        mid_layout.addWidget(disks_group, 1)
+        mid_layout.addWidget(cores_panel, 1)
+        mid_layout.addWidget(disks_panel, 1)
         outer.addLayout(mid_layout, 1)
 
-        procs_group = QGroupBox("Top Processes")
-        procs_layout = QVBoxLayout(procs_group)
+        procs_panel, procs_body = section_panel("TOP PROCESSES")
         procs_header = QHBoxLayout()
-        self.end_process_btn = QPushButton("End Selected Process")
-        self.end_process_btn.setProperty("variant", "danger")
-        self.end_process_btn.clicked.connect(self._confirm_end_process)
         self.process_status = QLabel("")
         self.process_status.setProperty("role", "caption")
-        procs_header.addWidget(self.end_process_btn)
         procs_header.addStretch(1)
         procs_header.addWidget(self.process_status)
-        procs_layout.addLayout(procs_header)
-        self.procs_table = QTableWidget(0, 4)
-        self.procs_table.setHorizontalHeaderLabels(["PID", "Process", "CPU %", "Memory"])
-        self.procs_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.procs_table.verticalHeader().setVisible(False)
-        self.procs_table.setAlternatingRowColors(True)
-        self.procs_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.procs_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.procs_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        procs_layout.addWidget(self.procs_table)
-        outer.addWidget(procs_group, 1)
+        procs_body.addLayout(procs_header)
+        procs_card, self.procs_rows = rows_card()
+        procs_body.addWidget(procs_card)
+        outer.addWidget(procs_panel, 1)
 
+        self._process_end_buttons = []
         self._process_runner = ToolRunner(
             "dashboard-tools",
             self._set_process_busy,
@@ -161,28 +138,11 @@ class DashboardTab(QWidget):
         self._refresh_processes()
 
     def _set_process_busy(self, busy):
-        self.end_process_btn.setEnabled(not busy)
+        for button in self._process_end_buttons:
+            button.setEnabled(not busy)
 
-    def _selected_process(self):
-        row = self.procs_table.currentRow()
-        if row < 0:
-            return None
-        pid_item = self.procs_table.item(row, 0)
-        name_item = self.procs_table.item(row, 1)
-        if not pid_item:
-            return None
-        try:
-            pid = int(pid_item.text())
-        except ValueError:
-            return None
-        return {"pid": pid, "name": name_item.text() if name_item else ""}
-
-    def _confirm_end_process(self):
-        selected = self._selected_process()
-        if not selected:
-            set_status_label(self.process_status, "Select a process first.", False)
-            return
-        allowed, info = sysinfo.is_process_termination_allowed(selected["pid"], selected["name"])
+    def _confirm_end_process(self, pid, name):
+        allowed, info = sysinfo.is_process_termination_allowed(pid, name)
         if not allowed:
             set_status_label(self.process_status, info, False)
             QMessageBox.warning(self, "Protected Process", info)
@@ -190,13 +150,13 @@ class DashboardTab(QWidget):
         reply = QMessageBox.question(
             self,
             "Confirm End Process",
-            f"End process {selected['name']} (PID {selected['pid']})?",
+            f"End process {name} (PID {pid})?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
-        self._process_runner.start(toolbox.end_process, (selected["pid"],), self._on_end_process_result)
+        self._process_runner.start(toolbox.end_process, (pid,), self._on_end_process_result)
 
     def _on_end_process_result(self, result):
         set_status_label(self.process_status, result.summary, result.success)
@@ -239,12 +199,15 @@ class DashboardTab(QWidget):
 
     def _refresh_disks(self):
         drives = sysinfo.get_disk_usage()
-        self.disks_table.setRowCount(len(drives))
-        for row, d in enumerate(drives):
-            _set_table_cell(self.disks_table, row, 0, f"{d['device']} ({d['mountpoint']})")
-            _set_table_cell(self.disks_table, row, 1, sysinfo.format_bytes(d["used"]))
-            _set_table_cell(self.disks_table, row, 2, sysinfo.format_bytes(d["free"]))
-            _set_table_cell(self.disks_table, row, 3, f"{d['percent']:.0f}%")
+        clear_layout(self.disks_rows)
+        if not drives:
+            self.disks_rows.addWidget(empty_row("No drives detected."))
+        else:
+            for d in drives:
+                primary = f"{d['device']} ({d['mountpoint']})"
+                secondary = f"{sysinfo.format_bytes(d['used'])} used / {sysinfo.format_bytes(d['free'])} free"
+                meta = f"{d['percent']:.0f}%"
+                self.disks_rows.addWidget(build_context_row(primary, secondary, meta))
 
         if drives:
             primary = next((d for d in drives if d["mountpoint"].lower().startswith("c:")), drives[0])
@@ -270,9 +233,19 @@ class DashboardTab(QWidget):
 
     def _refresh_processes(self):
         procs = sysinfo.get_top_processes(limit=10)
-        self.procs_table.setRowCount(len(procs))
-        for row, p in enumerate(procs):
-            _set_table_cell(self.procs_table, row, 0, str(p["pid"]))
-            _set_table_cell(self.procs_table, row, 1, p["name"])
-            _set_table_cell(self.procs_table, row, 2, f"{p['cpu']:.1f}")
-            _set_table_cell(self.procs_table, row, 3, sysinfo.format_bytes(p["mem"]))
+        clear_layout(self.procs_rows)
+        self._process_end_buttons = []
+        if not procs:
+            self.procs_rows.addWidget(empty_row("No process data available."))
+            return
+        for p in procs:
+            end_btn = QPushButton("End")
+            end_btn.setProperty("variant", "card-danger")
+            end_btn.clicked.connect(
+                lambda checked=False, pid=p["pid"], name=p["name"]: self._confirm_end_process(pid, name)
+            )
+            secondary = f"PID {p['pid']} · {sysinfo.format_bytes(p['mem'])}"
+            meta = f"{p['cpu']:.1f}% CPU"
+            row = build_context_row(p["name"], secondary, meta, trailing=end_btn)
+            self.procs_rows.addWidget(row)
+            self._process_end_buttons.append(end_btn)

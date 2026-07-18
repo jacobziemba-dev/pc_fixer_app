@@ -1,14 +1,14 @@
-from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QMessageBox,
-    QAbstractItemView, QTextEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
+    QCheckBox, QMessageBox, QScrollArea, QFrame, QTextEdit,
 )
 
 from app import system_info as sysinfo
 from app import toolbox
 from app.job_queue import get_job_queue
 from app.toolbox_widgets import ToolRunner, result_text, set_status_label
+from app.ui_kit import clear_layout, section_panel
 
 
 class ScanWorker(QThread):
@@ -31,7 +31,51 @@ class DeleteWorker(QThread):
         self.finished_with_result.emit(bytes_freed, errors)
 
 
+class CleanupCategoryCard(QFrame):
+    def __init__(self, category, on_changed):
+        super().__init__()
+        self._category = category
+        self.setProperty("role", "layout-card")
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        self.checkbox = QCheckBox()
+        self.checkbox.setChecked(True)
+        self.checkbox.stateChanged.connect(on_changed)
+        header.addWidget(self.checkbox)
+        title = QLabel(category.label)
+        title.setProperty("role", "layout-card-title")
+        title.setWordWrap(True)
+        header.addWidget(title, 1)
+        outer.addLayout(header)
+
+        desc = QLabel(category.description)
+        desc.setProperty("role", "caption")
+        desc.setWordWrap(True)
+        desc.setToolTip(category.description)
+        outer.addWidget(desc)
+
+        size_label = QLabel(sysinfo.format_bytes(category.size_bytes))
+        size_label.setProperty("role", "caption")
+        outer.addWidget(size_label)
+
+    def category(self):
+        return self._category
+
+    def is_checked(self):
+        return self.checkbox.isChecked()
+
+    def set_checked(self, checked):
+        self.checkbox.setChecked(checked)
+
+
 class CleanupTab(QWidget):
+    GALLERY_COLUMNS = 2
+
     def __init__(self):
         super().__init__()
         outer = QVBoxLayout(self)
@@ -58,18 +102,21 @@ class CleanupTab(QWidget):
         self.status_label.setProperty("role", "caption")
         outer.addWidget(self.status_label)
 
-        group = QGroupBox("Found Items")
-        group_layout = QVBoxLayout(group)
-
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Clean", "Item", "Size"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setAlternatingRowColors(True)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        group_layout.addWidget(self.table)
+        found_panel, found_body = section_panel("FOUND ITEMS")
+        self.gallery_scroll = QScrollArea()
+        self.gallery_scroll.setWidgetResizable(True)
+        self.gallery_scroll.setFrameShape(QFrame.NoFrame)
+        gallery_inner = QWidget()
+        self.gallery_grid = QGridLayout(gallery_inner)
+        self.gallery_grid.setSpacing(14)
+        self.gallery_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.gallery_scroll.setWidget(gallery_inner)
+        found_body.addWidget(self.gallery_scroll, 1)
+        self.empty_gallery_label = QLabel("Scan for junk files to see cleanup categories here.")
+        self.empty_gallery_label.setProperty("role", "caption")
+        self.empty_gallery_label.setAlignment(Qt.AlignCenter)
+        self.empty_gallery_label.setWordWrap(True)
+        found_body.addWidget(self.empty_gallery_label)
 
         selection_layout = QHBoxLayout()
         self.select_all_btn = QPushButton("Select All")
@@ -84,19 +131,18 @@ class CleanupTab(QWidget):
         selection_layout.addWidget(self.select_none_btn)
         selection_layout.addStretch(1)
         selection_layout.addWidget(self.total_label)
-        group_layout.addLayout(selection_layout)
+        found_body.addLayout(selection_layout)
 
-        outer.addWidget(group, 1)
+        outer.addWidget(found_panel, 2)
 
-        storage = QGroupBox("Storage Diagnostics (read-only)")
-        storage_layout = QVBoxLayout(storage)
+        storage_panel, storage_body = section_panel("STORAGE DIAGNOSTICS (READ-ONLY)")
         storage_caption = QLabel(
             "Find large files, folder size hotspots, and duplicate copies. "
             "These scans never delete files."
         )
         storage_caption.setProperty("role", "caption")
         storage_caption.setWordWrap(True)
-        storage_layout.addWidget(storage_caption)
+        storage_body.addWidget(storage_caption)
         buttons = QHBoxLayout()
         self.large_files_btn = QPushButton("Scan Large Files")
         self.large_files_btn.clicked.connect(
@@ -116,16 +162,16 @@ class CleanupTab(QWidget):
         buttons.addWidget(self.folder_sizes_btn)
         buttons.addWidget(self.duplicates_btn)
         buttons.addStretch(1)
-        storage_layout.addLayout(buttons)
+        storage_body.addLayout(buttons)
         self.storage_status = QLabel("Choose a storage scan to begin.")
         self.storage_status.setProperty("role", "caption")
         self.storage_status.setWordWrap(True)
-        storage_layout.addWidget(self.storage_status)
+        storage_body.addWidget(self.storage_status)
         self.storage_output = QTextEdit()
         self.storage_output.setReadOnly(True)
         self.storage_output.setMinimumHeight(120)
-        storage_layout.addWidget(self.storage_output)
-        outer.addWidget(storage)
+        storage_body.addWidget(self.storage_output)
+        outer.addWidget(storage_panel)
 
         footer_layout = QHBoxLayout()
         footer_layout.addStretch(1)
@@ -136,8 +182,7 @@ class CleanupTab(QWidget):
         footer_layout.addWidget(self.clean_btn)
         outer.addLayout(footer_layout)
 
-        self._categories = []
-        self._checkboxes = []
+        self._cards = []
         self._rescan_after_clean = False
         self._storage_runner = ToolRunner(
             "cleanup",
@@ -185,7 +230,7 @@ class CleanupTab(QWidget):
         self.folder_sizes_btn.setEnabled(False)
         self.duplicates_btn.setEnabled(False)
         self.status_label.setText("Scanning temp folders, browser caches, and Recycle Bin...")
-        self.table.setRowCount(0)
+        self._render_cards([])
 
     def _on_cleanup_worker_finished(self):
         self.scan_btn.setEnabled(True)
@@ -200,45 +245,33 @@ class CleanupTab(QWidget):
             self.start_scan()
 
     def _on_scanned(self, categories):
-        self._categories = categories
-        self._checkboxes = []
-
         if not categories:
             self.status_label.setText("Nothing worth cleaning was found. Your PC is already tidy.")
-            self.table.setRowCount(0)
+            self._render_cards([])
             self.clean_btn.setEnabled(False)
             return
 
         total = sum(c.size_bytes for c in categories)
         self.status_label.setText(f"Found {sysinfo.format_bytes(total)} across {len(categories)} categories.")
-
-        self.table.setRowCount(len(categories))
-        for row, cat in enumerate(categories):
-            checkbox = QCheckBox()
-            checkbox.setChecked(True)
-            checkbox.stateChanged.connect(self._update_total)
-            cell = QWidget()
-            cell_layout = QHBoxLayout(cell)
-            cell_layout.addWidget(checkbox)
-            cell_layout.setAlignment(Qt.AlignCenter)
-            cell_layout.setContentsMargins(0, 0, 0, 0)
-            self.table.setCellWidget(row, 0, cell)
-            self._checkboxes.append(checkbox)
-
-            name_item = QTableWidgetItem(f"{cat.label}\n{cat.description}")
-            name_item.setToolTip(cat.description)
-            self.table.setItem(row, 1, name_item)
-            self.table.setItem(row, 2, QTableWidgetItem(sysinfo.format_bytes(cat.size_bytes)))
-
-        self.table.resizeRowsToContents()
+        self._render_cards(categories)
         self._update_total()
 
+    def _render_cards(self, categories):
+        clear_layout(self.gallery_grid)
+        self._cards = []
+        for index, category in enumerate(categories):
+            card = CleanupCategoryCard(category, self._update_total)
+            self.gallery_grid.addWidget(card, index // self.GALLERY_COLUMNS, index % self.GALLERY_COLUMNS)
+            self._cards.append(card)
+        self.gallery_scroll.setVisible(bool(categories))
+        self.empty_gallery_label.setVisible(not categories)
+
     def _set_all_checked(self, checked):
-        for cb in self._checkboxes:
-            cb.setChecked(checked)
+        for card in self._cards:
+            card.set_checked(checked)
 
     def _selected_categories(self):
-        return [cat for cat, cb in zip(self._categories, self._checkboxes) if cb.isChecked()]
+        return [card.category() for card in self._cards if card.is_checked()]
 
     def _update_total(self):
         selected = self._selected_categories()

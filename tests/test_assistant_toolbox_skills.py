@@ -121,12 +121,16 @@ def test_end_process_skill_requires_confirmation_and_rejects_protected(monkeypat
         "app.assistant_core.sysinfo.is_process_termination_allowed",
         lambda pid, name="": (False, "explorer.exe is protected and cannot be ended."),
     )
+    snapshot = AssistantSnapshot(
+        datetime.now(),
+        top_cpu_processes=[{"pid": 123, "name": "explorer.exe"}],
+    )
 
     action, message = skill_request_to_action({
         "type": "skill_request",
         "skill": "end_process",
         "arguments": {"pid": 123},
-    }, AssistantSnapshot(datetime.now()))
+    }, snapshot)
 
     assert action is None
     assert "protected" in message.lower()
@@ -137,18 +141,64 @@ def test_end_process_skill_builds_confirmed_action(monkeypatch):
         "app.assistant_core.sysinfo.is_process_termination_allowed",
         lambda pid, name="": (True, "notepad.exe"),
     )
+    snapshot = AssistantSnapshot(
+        datetime.now(),
+        top_cpu_processes=[{"pid": 4321, "name": "notepad.exe"}],
+    )
 
     action, message = skill_request_to_action({
         "type": "skill_request",
         "skill": "end_process",
         "arguments": {"pid": 4321},
-    }, AssistantSnapshot(datetime.now()))
+    }, snapshot)
 
     assert message == ""
     assert action.kind == "end_process"
     assert action.risk == MEDIUM_RISK
     assert action.requires_confirmation is True
     assert action.payload == {"pid": 4321}
+
+
+def test_end_process_skill_rejects_pid_missing_from_snapshot():
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "end_process",
+        "arguments": {"pid": 99999},
+    }, AssistantSnapshot(datetime.now()))
+
+    assert action is None
+    assert "snapshot" in message.lower()
+
+
+def test_check_dns_resolve_rejects_disallowed_host_at_resolve_time():
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "check_dns_resolve",
+        "arguments": {"host": "evil.example.com"},
+    }, AssistantSnapshot(datetime.now()))
+
+    assert action is None
+    assert "allowlist" in message.lower()
+
+
+def test_ping_host_rejects_disallowed_host_and_clamps_count():
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "ping_host",
+        "arguments": {"host": "evil.example.com"},
+    }, AssistantSnapshot(datetime.now()))
+
+    assert action is None
+    assert "allowlist" in message.lower()
+
+    action, message = skill_request_to_action({
+        "type": "skill_request",
+        "skill": "ping_host",
+        "arguments": {"host": "1.1.1.1", "count": 100},
+    }, AssistantSnapshot(datetime.now()))
+
+    assert message == ""
+    assert action.payload == {"host": "1.1.1.1", "count": 4}
 
 
 def test_open_windows_settings_skill_rejects_unknown_page():

@@ -260,7 +260,7 @@ def check_network_health():
     return ToolResult(not errors and bool(active_adapters), title, summary, details, errors)
 
 
-_DNS_PING_HOSTS = frozenset({
+DNS_PING_HOSTS = frozenset({
     "one.one.one.one",
     "1.1.1.1",
     "dns.google",
@@ -298,12 +298,12 @@ def list_network_adapters():
 def check_dns_resolve(host="one.one.one.one"):
     title = "DNS Resolve"
     key = str(host or "").strip().lower()
-    if key not in _DNS_PING_HOSTS:
+    if key not in DNS_PING_HOSTS:
         return ToolResult(
             False,
             title,
             "Host is not on the allowlist.",
-            errors=[f"Allowed hosts: {', '.join(sorted(_DNS_PING_HOSTS))}"],
+            errors=[f"Allowed hosts: {', '.join(sorted(DNS_PING_HOSTS))}"],
         )
     try:
         infos = socket.getaddrinfo(key, None)
@@ -321,12 +321,12 @@ def check_dns_resolve(host="one.one.one.one"):
 def ping_host(host="one.one.one.one", count=2):
     title = "Ping Host"
     key = str(host or "").strip().lower()
-    if key not in _DNS_PING_HOSTS:
+    if key not in DNS_PING_HOSTS:
         return ToolResult(
             False,
             title,
             "Host is not on the allowlist.",
-            errors=[f"Allowed hosts: {', '.join(sorted(_DNS_PING_HOSTS))}"],
+            errors=[f"Allowed hosts: {', '.join(sorted(DNS_PING_HOSTS))}"],
         )
     count = max(1, min(int(count or 2), 4))
     if is_windows():

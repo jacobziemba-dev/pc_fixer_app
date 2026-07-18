@@ -53,13 +53,13 @@ Tabs that emit `action_requested(kind, payload)` get auto-connected to `MainWind
 
 - **`app/system_info.py`** — all raw OS/process/disk/startup/cleanup data access (psutil, WMI/PowerShell calls, etc.). This is the only place that should reach into the OS for read-only data.
 - **`app/toolbox.py`** — conservative, named PC helper actions (health checks, network checks, power-plan changes, cleanup scans, report export). Every action is a fixed Python function, not arbitrary command execution. **Do not add an arbitrary shell/PowerShell/Python execution surface here.**
-- **`app/assistant_core.py`** (~1700 lines, the largest module) — the assistant's brain:
+- **`app/assistant_core.py`** (~2700 lines, the largest module) — the assistant's brain:
   - `ASSISTANT_TOOLS` / `ASSISTANT_SKILLS`: the fixed catalog of things the LLM is allowed to request.
   - Snapshot collection (`collect_assistant_snapshot`, `AssistantSnapshot`) — builds the structured PC-state context sent to the model.
   - Skill request parsing/validation (`extract_skill_requests`, `validate_skill_request`, `skill_request_to_action`) — turns model-emitted JSON into an `AssistantAction`, resolving fuzzy targets (display, audio device/session, layout) against the live snapshot.
   - `execute_assistant_action` — the single place that actually performs a skill's effect, dispatching to `toolbox`, `audio_control`, or `window_layouts`.
 - **`app/ai_engine.py`** — wraps `llama-cpp-python` (`EmbeddedAI`), chat prompt formatting (Llama 3.2 Instruct template), history trimming, and prompt composition (snapshot context + skill catalog + history + question). Model file resolution defaults to `models/llama-3.2-3b-instruct-q4_k_m.gguf`.
-- **`app/job_queue.py`** — a single global `JobQueue` (via `get_job_queue()`) that serializes QThread-based background workers by a string `scope`, rejecting a submission if that scope is already running/queued. This is the only mechanism for running scans/actions off the UI thread.
+- **`app/job_queue.py`** — a single global `JobQueue` (via `get_job_queue()`) that serializes QThread-based background workers by a string `scope`, rejecting a submission if that scope is already running/queued. This is the only mechanism for running scans/actions off the UI thread. The AI Chat tab uses scopes `assistant-inference` (model streaming) and `assistant-actions` (skill execution).
 - **`app/tool_history.py`** — recent toolbox results for the Reports tab.
 - **`app/theme.py`** — shared Qt stylesheet (`DARK_STYLESHEET`) applied app-wide.
 - **`app/audio_control.py`** / **`app/window_layouts.py`** — audio session control (pycaw) and window layout capture/restore, called from `assistant_core.execute_assistant_action` and from their respective tabs.

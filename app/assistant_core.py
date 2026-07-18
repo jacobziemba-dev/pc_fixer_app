@@ -152,7 +152,7 @@ ASSISTANT_TOOLS = {
         "Reload open windows and saved window layouts.",
         handler="tab",
         confirm_label="Refresh",
-        keywords=("layout", "layouts", "window", "windows", "desktop"),
+        keywords=("layout", "layouts", "window layout", "arrange", "desktop layout"),
     ),
     "scan_cleanup": AssistantTool(
         "scan_cleanup",
@@ -1100,7 +1100,7 @@ SKILL_DOMAIN_KEYWORDS = {
     ),
     "display": ("display", "monitor", "refresh rate", "screen", "hz", "resolution"),
     "audio": ("audio", "sound", "speaker", "volume", "mute", "route", "headphones"),
-    "layouts": ("layout", "layouts", "window", "windows", "arrange", "desktop layout"),
+    "layouts": ("layout", "layouts", "arrange", "snap window", "window layout", "desktop layout"),
     "startup": ("startup", "boot", "launch on start", "startup apps", "startup programs"),
     "storage": (
         "storage", "disk", "drive", "large file", "large files", "duplicate",
@@ -2201,11 +2201,25 @@ def skill_request_to_action(request, snapshot=None):
 
     if kind == "check_dns_resolve":
         host = str(args.get("host") or "one.one.one.one").strip().lower()
+        if host not in toolbox.DNS_PING_HOSTS:
+            return None, (
+                f"Host is not on the allowlist. Allowed hosts: "
+                f"{', '.join(sorted(toolbox.DNS_PING_HOSTS))}."
+            )
         return _action(kind, payload={"host": host}), ""
 
     if kind == "ping_host":
         host = str(args.get("host") or "one.one.one.one").strip().lower()
-        count = int(args.get("count", 2))
+        if host not in toolbox.DNS_PING_HOSTS:
+            return None, (
+                f"Host is not on the allowlist. Allowed hosts: "
+                f"{', '.join(sorted(toolbox.DNS_PING_HOSTS))}."
+            )
+        try:
+            count = int(args.get("count", 2))
+        except (TypeError, ValueError):
+            count = 2
+        count = max(1, min(count, 4))
         return _action(kind, payload={"host": host, "count": count}), ""
 
     if kind == "capture_layout_snapshot":
@@ -2385,7 +2399,10 @@ def _resolve_process(args, snapshot):
         match = by_pid.get(pid)
         if match:
             return match, ""
-        return {"pid": pid, "name": ""}, ""
+        return None, (
+            "That process is not in the current snapshot. "
+            "Refresh top processes before ending a process."
+        )
     needle = str(args.get("process_name") or args.get("app") or "").strip().lower()
     if not needle:
         return None, "Provide a process pid or process name from the snapshot."

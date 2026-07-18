@@ -2,12 +2,13 @@ import psutil
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTextEdit, QMessageBox, QComboBox,
 )
 
 from app import toolbox
 from app.toolbox_widgets import ToolRunner, result_text, set_status_label
+from app.ui_kit import section_panel
 
 
 class NetworkTab(QWidget):
@@ -35,8 +36,9 @@ class NetworkTab(QWidget):
         subtitle.setWordWrap(True)
         outer.addWidget(subtitle)
 
-        checks = QGroupBox("Connectivity")
-        checks_layout = QHBoxLayout(checks)
+        checks, checks_body = section_panel("CONNECTIVITY")
+        checks_layout = QHBoxLayout()
+        checks_layout.setSpacing(8)
         self.check_btn = QPushButton("Check Network Health")
         self.check_btn.clicked.connect(lambda: self._run_tool(toolbox.check_network_health))
         self.flush_btn = QPushButton("Flush DNS Cache")
@@ -53,16 +55,19 @@ class NetworkTab(QWidget):
         checks_layout.addWidget(self.renew_ip_btn)
         checks_layout.addWidget(self.winsock_btn)
         checks_layout.addStretch(1)
+        checks_body.addLayout(checks_layout)
         outer.addWidget(checks)
 
-        adapters = QGroupBox("Adapters")
-        adapters_layout = QHBoxLayout(adapters)
+        adapters, adapters_body = section_panel("ADAPTERS")
+        adapters_layout = QHBoxLayout()
+        adapters_layout.setSpacing(8)
         self.adapter_combo = QComboBox()
         self.restart_btn = QPushButton("Restart Adapter")
         self.restart_btn.setProperty("variant", "danger")
         self.restart_btn.clicked.connect(self._confirm_restart_adapter)
         adapters_layout.addWidget(self.adapter_combo, 1)
         adapters_layout.addWidget(self.restart_btn)
+        adapters_body.addLayout(adapters_layout)
         outer.addWidget(adapters)
 
         self.status_label = QLabel("Choose a network tool to begin.")

@@ -3,11 +3,12 @@ from datetime import datetime
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QScrollArea, QPushButton,
 )
 
 from app import system_info as sysinfo
+from app.ui_kit import build_context_row, clear_layout, empty_row, rows_card, section_panel
 
 
 def _fmt_date(value):
@@ -28,20 +29,6 @@ class HardwareWorker(QThread):
     def run(self):
         data = sysinfo.get_hardware_info()
         self.finished_with_data.emit(data)
-
-
-class SpecRow(QWidget):
-    def __init__(self, label_text, value_text):
-        super().__init__()
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 2, 0, 2)
-        label = QLabel(label_text)
-        label.setProperty("role", "caption")
-        label.setFixedWidth(140)
-        value = QLabel(value_text)
-        value.setWordWrap(True)
-        layout.addWidget(label)
-        layout.addWidget(value, 1)
 
 
 class HardwareTab(QWidget):
@@ -83,20 +70,17 @@ class HardwareTab(QWidget):
         self._worker.start()
 
     def _clear_grid(self):
-        while self.grid.count():
-            item = self.grid.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
+        clear_layout(self.grid)
 
     def _make_group(self, title, rows):
-        group = QGroupBox(title)
-        layout = QVBoxLayout(group)
+        panel, body = section_panel(title.upper())
+        card, card_rows = rows_card()
         if not rows:
-            layout.addWidget(QLabel("No data available"))
+            card_rows.addWidget(empty_row("No data available"))
         for label_text, value_text in rows:
-            layout.addWidget(SpecRow(label_text, value_text))
-        return group
+            card_rows.addWidget(build_context_row(label_text, meta_text=value_text))
+        body.addWidget(card)
+        return panel
 
     def _on_loaded(self, data):
         self._clear_grid()

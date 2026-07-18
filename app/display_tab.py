@@ -1,11 +1,12 @@
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QMessageBox,
 )
 
 from app import system_info as sysinfo
 from app.job_queue import get_job_queue
+from app.ui_kit import section_panel
 
 
 class DisplayLoadWorker(QThread):
@@ -64,8 +65,7 @@ class DisplayTab(QWidget):
         subtitle.setWordWrap(True)
         outer.addWidget(subtitle)
 
-        selector_group = QGroupBox("Choose Monitor to Change")
-        selector_layout = QVBoxLayout(selector_group)
+        selector_group, selector_layout = section_panel("CHOOSE MONITOR TO CHANGE")
         selector_label = QLabel("Pick which connected display gets the refresh-rate change.")
         selector_label.setProperty("role", "caption")
         selector_label.setWordWrap(True)
@@ -75,8 +75,7 @@ class DisplayTab(QWidget):
         selector_layout.addWidget(self.monitor_combo)
         outer.addWidget(selector_group)
 
-        info_group = QGroupBox("Current Display Mode")
-        info_layout = QVBoxLayout(info_group)
+        info_group, info_layout = section_panel("CURRENT DISPLAY MODE")
         self.name_label = QLabel("--")
         self.device_label = QLabel("--")
         self.device_label.setProperty("role", "caption")
@@ -94,8 +93,9 @@ class DisplayTab(QWidget):
             info_layout.addWidget(label)
         outer.addWidget(info_group)
 
-        change_group = QGroupBox("Choose a Refresh Rate")
-        change_layout = QHBoxLayout(change_group)
+        change_group, change_body = section_panel("CHOOSE A REFRESH RATE")
+        change_layout = QHBoxLayout()
+        change_layout.setSpacing(8)
         self.rate_combo = QComboBox()
         self.apply_btn = QPushButton("Apply Refresh Rate")
         self.apply_btn.clicked.connect(self.confirm_and_apply)
@@ -106,6 +106,7 @@ class DisplayTab(QWidget):
         change_layout.addWidget(self.rate_combo, 1)
         change_layout.addWidget(self.apply_btn)
         change_layout.addWidget(self.revert_btn)
+        change_body.addLayout(change_layout)
         outer.addWidget(change_group)
 
         self.status_label = QLabel("Loading display details...")

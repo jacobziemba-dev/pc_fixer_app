@@ -1,11 +1,12 @@
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTextEdit, QMessageBox, QComboBox,
 )
 
 from app import toolbox
 from app.toolbox_widgets import ToolRunner, result_text, set_status_label
+from app.ui_kit import section_panel
 
 
 class HealthTab(QWidget):
@@ -29,8 +30,9 @@ class HealthTab(QWidget):
         subtitle.setWordWrap(True)
         outer.addWidget(subtitle)
 
-        checks = QGroupBox("Read-only Checks")
-        checks_layout = QHBoxLayout(checks)
+        checks, checks_body = section_panel("READ-ONLY CHECKS")
+        checks_layout = QHBoxLayout()
+        checks_layout.setSpacing(8)
         self.update_btn = QPushButton("Windows Update")
         self.disk_btn = QPushButton("Disk Health")
         self.events_btn = QPushButton("Event Logs")
@@ -50,10 +52,12 @@ class HealthTab(QWidget):
             button.clicked.connect(lambda checked=False, fn=fn: self._run_tool(fn))
             checks_layout.addWidget(button)
         checks_layout.addStretch(1)
+        checks_body.addLayout(checks_layout)
         outer.addWidget(checks)
 
-        power = QGroupBox("Power Plan")
-        power_layout = QHBoxLayout(power)
+        power, power_body = section_panel("POWER PLAN")
+        power_layout = QHBoxLayout()
+        power_layout.setSpacing(8)
         self.power_check_btn = QPushButton("Check Power Plan")
         self.power_check_btn.setProperty("variant", "secondary")
         self.power_check_btn.clicked.connect(lambda: self._run_tool(toolbox.check_power_plan))
@@ -66,10 +70,12 @@ class HealthTab(QWidget):
         power_layout.addWidget(self.power_check_btn)
         power_layout.addWidget(self.power_combo, 1)
         power_layout.addWidget(self.power_apply_btn)
+        power_body.addLayout(power_layout)
         outer.addWidget(power)
 
-        helpers = QGroupBox("Quick Helpers")
-        helpers_layout = QHBoxLayout(helpers)
+        helpers, helpers_body = section_panel("QUICK HELPERS")
+        helpers_layout = QHBoxLayout()
+        helpers_layout.setSpacing(8)
         self.restore_btn = QPushButton("Create Restore Point")
         self.restore_btn.setProperty("variant", "secondary")
         self.restore_btn.clicked.connect(self._confirm_restore_point)
@@ -98,6 +104,7 @@ class HealthTab(QWidget):
         helpers_layout.addWidget(self.settings_btn)
         helpers_layout.addWidget(self.folder_combo, 1)
         helpers_layout.addWidget(self.folder_btn)
+        helpers_body.addLayout(helpers_layout)
         outer.addWidget(helpers)
 
         self.status_label = QLabel("Choose a health check to begin.")

@@ -5,6 +5,8 @@ This file documents what the PC Fix assistant can request through LLM chat. The 
 ## Safety Rules
 
 - System-changing skills must become confirmation cards before they run.
+- In AI Chat, read-only skills (`Confirmation: No`) auto-run after the model proposes them; PC-changing skills still require Confirm (or a short chat affirmation like "yes" / "do it").
+- Every chat turn gives the model a compact Capability overview of all skill names, plus detailed schemas for intent-matched skills.
 - The assistant cannot run arbitrary shell commands, arbitrary Python, registry edits, unrestricted PowerShell, or arbitrary file deletion.
 - Target-based skills are resolved by Python from the current PC snapshot. If the target is missing or ambiguous, the action is skipped or a safe refresh action is suggested.
 - Keep this file updated whenever `ASSISTANT_SKILLS` or related action behavior changes in `app/assistant_core.py`.

@@ -134,7 +134,32 @@ class ActionCard(QFrame):
         buttons.addWidget(self.cancel_btn)
         buttons.addWidget(self.confirm_btn)
         layout.addLayout(buttons)
+        self._button_row = buttons
         self._pending = False
+        self._awaiting_confirm = bool(action.requires_confirmation)
+        if not action.requires_confirmation:
+            self.cancel_btn.setVisible(False)
+            self.confirm_btn.setVisible(False)
+
+    @property
+    def action(self):
+        return self._action
+
+    @property
+    def awaiting_confirm(self):
+        return self._awaiting_confirm and not self._pending
+
+    def begin_auto_run(self):
+        """Start a read-only action without a Confirm click."""
+        if self._action.requires_confirmation or self._pending:
+            return
+        self.cancel_btn.setVisible(False)
+        self.confirm_btn.setVisible(True)
+        self.confirm_btn.setEnabled(False)
+        self.confirm_btn.setText("Running…")
+        self._pending = True
+        self._awaiting_confirm = False
+        self.confirmed.emit(self._action, self)
 
     def _confirm(self):
         # Do not mark Confirmed until the parent actually runs the action.
@@ -142,7 +167,15 @@ class ActionCard(QFrame):
         self.cancel_btn.setEnabled(False)
         self.confirm_btn.setText("Running…")
         self._pending = True
+        self._awaiting_confirm = False
         self.confirmed.emit(self._action, self)
+
+    def mark_queued(self):
+        self.confirm_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        self.confirm_btn.setText("Queued…")
+        self._pending = True
+        self._awaiting_confirm = False
 
     def _cancel(self):
         self.mark_cancelled()
@@ -151,9 +184,11 @@ class ActionCard(QFrame):
         self._set_done("Confirmed")
 
     def mark_cancelled(self):
+        self._awaiting_confirm = False
         self._set_done("Cancelled")
 
     def mark_failed(self, message="Failed"):
+        self._awaiting_confirm = False
         self._set_done("Failed")
         self.set_result(False, message)
 
@@ -164,10 +199,12 @@ class ActionCard(QFrame):
         self.result_label.setVisible(bool(text.strip()))
 
     def _set_done(self, text):
+        self.confirm_btn.setVisible(True)
         self.confirm_btn.setEnabled(False)
         self.cancel_btn.setEnabled(False)
         self.confirm_btn.setText(text)
         self._pending = False
+        self._awaiting_confirm = False
 
     def _target_text(self, action):
         payload = action.payload or {}

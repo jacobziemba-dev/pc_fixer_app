@@ -1409,11 +1409,15 @@ SKILL_DOMAIN_KEYWORDS = {
         "route", "headphones", "headset",
     ),
     "layouts": ("layout", "layouts", "arrange", "snap window", "window layout", "desktop layout"),
-    "startup": ("startup", "boot", "booting", "launch on start", "startup apps", "startup programs"),
+    "startup": (
+        "startup", "boot", "booting", "launch on start", "startup apps", "startup programs",
+        "slow", "lag", "sluggish", "performance", "freezing", "stutter",
+    ),
     "storage": (
         "storage", "disk", "drive", "large file", "large files", "duplicate",
         "folder size", "downloads", "desktop files", "space", "chkdsk", "free space",
         "ssd", "hdd", "smart status",
+        "slow", "lag", "sluggish", "performance", "freezing", "stutter",
     ),
     "cleanup": (
         "clean", "cleaning", "cleanup", "junk", "temp", "cache", "recycle",
@@ -1427,16 +1431,48 @@ SKILL_DOMAIN_KEYWORDS = {
     "hardware": (
         "hardware", "gpu", "cpu", "bios", "motherboard", "specs", "uptime",
         "memory", "memory pressure", "ram", "usb", "bluetooth",
+        "slow", "lag", "sluggish", "performance", "freezing", "stutter",
     ),
     "process": (
         "process", "processes", "task manager", "end process", "kill",
         "cpu hog", "frozen", "not responding", "hung",
+        "slow", "lag", "sluggish", "performance", "freezing", "stutter",
     ),
     "system": (
         "settings", "task manager", "resource monitor", "device manager",
         "explorer", "restore point", "open folder", "printer", "spooler",
         "services", "troubleshoot", "troubleshooter",
     ),
+}
+
+CAPABILITY_DOMAIN_ORDER = (
+    "hardware",
+    "process",
+    "storage",
+    "cleanup",
+    "network",
+    "startup",
+    "power",
+    "security",
+    "display",
+    "audio",
+    "layouts",
+    "system",
+)
+
+CAPABILITY_DOMAIN_LABELS = {
+    "hardware": "hardware & specs",
+    "process": "processes & performance",
+    "storage": "storage & disks",
+    "cleanup": "cleanup",
+    "network": "network",
+    "startup": "startup apps",
+    "power": "power & battery",
+    "security": "security & updates",
+    "display": "display",
+    "audio": "audio",
+    "layouts": "window layouts",
+    "system": "system tools",
 }
 
 SKILL_DOMAINS = {
@@ -1530,7 +1566,22 @@ FULL_CATALOG_PROMPTS = (
     "help me with everything",
     "show all skills",
     "what are you able",
+    "capabilities",
+    "what are your skills",
+    "how can you help",
+    "what tools",
+    "what are your capabilities",
+    "show capabilities",
 )
+
+# Heavy snapshot pieces change rarely; cache to cut per-turn latency.
+_HEAVY_SNAPSHOT_TTL_SECONDS = 300
+_heavy_snapshot_cache = {
+    "hardware_summary": None,
+    "hardware_at": None,
+    "installed_programs_summary": None,
+    "programs_at": None,
+}
 
 
 _KEYWORD_PATTERNS = {}
@@ -1605,26 +1656,135 @@ def get_assistant_skills():
     return dict(ASSISTANT_SKILLS)
 
 
+def is_capability_question(user_text):
+    lowered = (user_text or "").lower()
+    if not lowered.strip():
+        return False
+    return any(phrase in lowered for phrase in FULL_CATALOG_PROMPTS)
+
+
+def _skills_by_domain():
+    grouped = {domain: [] for domain in CAPABILITY_DOMAIN_ORDER}
+    for name, skill in ASSISTANT_SKILLS.items():
+        if not skill.enabled:
+            continue
+        domains = SKILL_DOMAINS.get(name) or ()
+        placed = False
+        for domain in CAPABILITY_DOMAIN_ORDER:
+            if domain in domains:
+                grouped[domain].append(name)
+                placed = True
+                break
+        if not placed:
+            grouped.setdefault("system", []).append(name)
+    return grouped
+
+
+def render_capability_overview():
+    """Compact name-only map of every enabled skill, grouped by domain."""
+    lines = ["Capability overview (request only these skill names):"]
+    grouped = _skills_by_domain()
+    for domain in CAPABILITY_DOMAIN_ORDER:
+        names = grouped.get(domain) or []
+        if not names:
+            continue
+        label = CAPABILITY_DOMAIN_LABELS.get(domain, domain)
+        lines.append(f"- {label}: {', '.join(names)}")
+    return "\n".join(lines)
+
+
+def render_capability_user_answer():
+    """Human-readable canned reply for capability questions (no inference)."""
+    lines = [
+        "I can help with these PC Fix areas using fixed, validated skills "
+        "(no arbitrary shell or registry commands):",
+    ]
+    grouped = _skills_by_domain()
+    for domain in CAPABILITY_DOMAIN_ORDER:
+        names = grouped.get(domain) or []
+        if not names:
+            continue
+        label = CAPABILITY_DOMAIN_LABELS.get(domain, domain)
+        preview = ", ".join(names[:6])
+        if len(names) > 6:
+            preview += f", and {len(names) - 6} more"
+        lines.append(f"- {label}: {preview}")
+    lines.append(
+        "Ask about a specific issue (slow PC, network, cleanup, audio, etc.) "
+        "and I will recommend a skill. PC-changing actions need your confirmation."
+    )
+    return "\n".join(lines)
+
+
+def _few_shot_skill_example(skill_names):
+    """Pick one JSON example from the selected detailed catalog."""
+    preferred = []
+    core_fallback = []
+    for name in skill_names:
+        skill = ASSISTANT_SKILLS.get(name)
+        if not skill or not skill.enabled or not skill.examples:
+            continue
+        if name in CORE_SKILL_NAMES:
+            core_fallback.append(skill)
+        else:
+            preferred.append(skill)
+    for skill in preferred + core_fallback:
+        example = skill.examples[0]
+        if isinstance(example, dict):
+            return json.dumps(example, separators=(",", ":"))
+    return '{"type":"skill_request","skill":"scan_cleanup","arguments":{}}'
+
+
 def render_skill_catalog(user_text=None, skill_names=None):
     if skill_names is None:
         skill_names = select_skill_names_for_prompt(user_text)
+    enabled_total = sum(1 for skill in ASSISTANT_SKILLS.values() if skill.enabled)
+    compact = len(skill_names) >= enabled_total and enabled_total > 0
+    example_json = _few_shot_skill_example(skill_names)
     lines = [
-        "Available assistant skills:",
+        "Detailed skills for this question (schemas + confirmation flags):",
         "When useful, include one fenced JSON skill request exactly like:",
-        '```json\n{"type":"skill_request","skill":"scan_cleanup","arguments":{}}\n```',
+        f"```json\n{example_json}\n```",
+        "You may request any skill named in the Capability overview; prefer skills "
+        "listed here when argument details are shown.",
         "Never invent skills. Never request shell commands, arbitrary code, registry edits, or arbitrary file deletion.",
     ]
     for name in skill_names:
         skill = ASSISTANT_SKILLS.get(name)
         if not skill or not skill.enabled:
             continue
-        args = ", ".join(f"{arg_name}: {kind}" for arg_name, kind in skill.input_schema.items()) or "none"
-        confirmation = "confirmation required" if skill.requires_confirmation else "read-only action card"
-        lines.append(
-            f"- {skill.name}: {skill.description} Args: {args}. "
-            f"Risk: {skill.risk}; {confirmation}."
-        )
+        confirmation = "confirmation required" if skill.requires_confirmation else "read-only"
+        if compact:
+            lines.append(f"- {skill.name}: {skill.description} Risk: {skill.risk}; {confirmation}.")
+        else:
+            args = ", ".join(f"{arg_name}: {kind}" for arg_name, kind in skill.input_schema.items()) or "none"
+            lines.append(
+                f"- {skill.name}: {skill.description} Args: {args}. "
+                f"Risk: {skill.risk}; {confirmation}."
+            )
     return "\n".join(lines)
+
+
+def clear_heavy_snapshot_cache():
+    """Test helper: reset TTL caches for hardware/programs."""
+    _heavy_snapshot_cache["hardware_summary"] = None
+    _heavy_snapshot_cache["hardware_at"] = None
+    _heavy_snapshot_cache["installed_programs_summary"] = None
+    _heavy_snapshot_cache["programs_at"] = None
+
+
+def _cached_heavy_value(key, at_key, loader):
+    now = datetime.now()
+    cached = _heavy_snapshot_cache.get(key)
+    cached_at = _heavy_snapshot_cache.get(at_key)
+    if cached is not None and cached_at is not None:
+        age = (now - cached_at).total_seconds()
+        if age < _HEAVY_SNAPSHOT_TTL_SECONDS:
+            return cached
+    value = loader()
+    _heavy_snapshot_cache[key] = value
+    _heavy_snapshot_cache[at_key] = now
+    return value
 
 
 def collect_assistant_snapshot(include_cleanup=False):
@@ -1661,8 +1821,15 @@ def collect_assistant_snapshot(include_cleanup=False):
         snapshot.network_adapters = []
 
     try:
-        hardware = sysinfo.get_hardware_info()
-        snapshot.hardware_summary = _hardware_summary(hardware)
+        def _load_hardware():
+            hardware = sysinfo.get_hardware_info()
+            return _hardware_summary(hardware)
+
+        snapshot.hardware_summary = _cached_heavy_value(
+            "hardware_summary",
+            "hardware_at",
+            _load_hardware,
+        )
     except Exception:
         snapshot.unavailable.append("hardware")
 
@@ -1672,8 +1839,15 @@ def collect_assistant_snapshot(include_cleanup=False):
         snapshot.unavailable.append("startup apps")
 
     try:
-        programs = sysinfo.get_installed_programs()
-        snapshot.installed_programs_summary = _program_summary(programs)
+        def _load_programs():
+            programs = sysinfo.get_installed_programs()
+            return _program_summary(programs)
+
+        snapshot.installed_programs_summary = _cached_heavy_value(
+            "installed_programs_summary",
+            "programs_at",
+            _load_programs,
+        )
     except Exception:
         snapshot.unavailable.append("installed programs")
 

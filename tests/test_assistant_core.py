@@ -477,3 +477,87 @@ def test_detect_skill_domains_still_matches_layout_intents():
     assert "layouts" in detect_skill_domains("arrange my windows")
     assert "layouts" in detect_skill_domains("restore my window layout")
     assert "layouts" in detect_skill_domains("save this desktop layout")
+
+
+def test_detect_skill_domains_slow_pc_includes_performance_domains():
+    from app.assistant_core import detect_skill_domains, select_skill_names_for_prompt, CORE_SKILL_NAMES
+
+    domains = detect_skill_domains("Why is my PC slow?")
+    assert {"process", "hardware", "storage", "startup"}.issubset(domains)
+
+    names = set(select_skill_names_for_prompt("Why is my PC slow?"))
+    assert names > set(CORE_SKILL_NAMES)
+    assert "check_memory_pressure" in names
+    assert "review_startup_impact" in names
+    assert "inspect_top_processes" in names
+
+
+def test_render_capability_overview_lists_enabled_skills():
+    from app.assistant_core import render_capability_overview, ASSISTANT_SKILLS
+
+    overview = render_capability_overview()
+    assert overview.startswith("Capability overview")
+    enabled = [name for name, skill in ASSISTANT_SKILLS.items() if skill.enabled]
+    assert len(enabled) >= 40
+    for name in enabled[:10]:
+        assert name in overview
+    assert len(overview) <= 2500
+
+
+def test_is_capability_question_matches_expanded_phrases():
+    from app.assistant_core import is_capability_question, render_capability_user_answer
+
+    assert is_capability_question("what can you do?")
+    assert is_capability_question("How can you help me?")
+    assert is_capability_question("show capabilities")
+    assert not is_capability_question("why is my pc slow")
+    answer = render_capability_user_answer()
+    assert "cleanup" in answer.lower()
+    assert "confirmation" in answer.lower()
+
+
+def test_render_skill_catalog_uses_dynamic_few_shot_from_selection():
+    from app.assistant_core import render_skill_catalog
+
+    audio_catalog = render_skill_catalog("mute chrome volume")
+    assert "set_app_volume" in audio_catalog or "mute_app_audio" in audio_catalog
+    assert "skill_request" in audio_catalog
+    # Prefer a domain example over always scan_cleanup when audio is selected.
+    assert '"skill":"set_app_volume"' in audio_catalog or '"skill":"mute_app_audio"' in audio_catalog or "scan_cleanup" in audio_catalog
+
+
+def test_heavy_snapshot_cache_skips_second_hardware_call():
+    from unittest.mock import MagicMock, patch
+    from app.assistant_core import clear_heavy_snapshot_cache, collect_assistant_snapshot
+
+    clear_heavy_snapshot_cache()
+    hardware = MagicMock(return_value={
+        "cpu": [{"Name": "CPU"}],
+        "gpu": [],
+        "system": [],
+        "board": [],
+        "bios": [],
+        "disk_drives": [],
+        "physical_disks": [],
+        "memory_modules": [],
+    })
+    programs = MagicMock(return_value=[])
+    with patch("app.assistant_core.sysinfo.prime_process_cpu_percent"), \
+         patch("app.assistant_core.sysinfo.get_cpu_stats", return_value={"percent": 1}), \
+         patch("app.assistant_core.sysinfo.get_memory_stats", return_value={"percent": 1, "total": 1, "used": 1, "available": 1}), \
+         patch("app.assistant_core.sysinfo.get_disk_usage", return_value=[]), \
+         patch("app.assistant_core.sysinfo.get_network_counters", return_value={}), \
+         patch("app.assistant_core.toolbox.list_network_adapter_names", return_value=[]), \
+         patch("app.assistant_core.sysinfo.get_hardware_info", hardware), \
+         patch("app.assistant_core.sysinfo.get_startup_items", return_value=[]), \
+         patch("app.assistant_core.sysinfo.get_installed_programs", programs), \
+         patch("app.assistant_core.sysinfo.get_top_processes", return_value=[]), \
+         patch("app.assistant_core.sysinfo.get_display_devices", return_value=[]), \
+         patch("app.assistant_core._audio_snapshot", return_value=([], [])), \
+         patch("app.assistant_core._layout_snapshot", return_value=[]):
+        collect_assistant_snapshot()
+        collect_assistant_snapshot()
+
+    assert hardware.call_count == 1
+    assert programs.call_count == 1
+    clear_heavy_snapshot_cache()

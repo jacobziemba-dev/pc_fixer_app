@@ -84,12 +84,13 @@ Every system-changing toolbox or assistant action must use a fixed, named code p
 
 When changing assistant code in `app/assistant_core.py`, `app/ai_engine.py`, or `app/assistant_tab.py`, follow these rules:
 
-1. The model only sees an intent-filtered catalog via `render_skill_catalog(user_text=...)` / `select_skill_names_for_prompt`. Add new skills to `SKILL_DOMAINS` (and to `CORE_SKILL_NAMES` only if they must appear on every turn).
+1. The model always sees a compact Capability overview (`render_capability_overview`) of every enabled skill name, plus an intent-filtered detailed catalog via `render_skill_catalog(user_text=...)` / `select_skill_names_for_prompt`. Add new skills to `SKILL_DOMAINS` (and to `CORE_SKILL_NAMES` only if they must appear with full schemas on every turn).
 2. Validation is fail-closed: `validate_skill_request` rejects unknown arguments and unknown schema types.
 3. Scan roots, DNS/ping hosts, settings pages, known folders, and cleanup categories stay allowlisted in Python — never pass free-form LLM paths or commands through.
 4. Fuzzy targets resolve from the live snapshot (`_resolve_*` / `_single_match`). Adapters, startup items, and processes follow the same pattern as display/audio/layout.
-5. PC-changing skills set `requires_confirmation=True`. In AI Chat, confirm via `ActionCard` only — do not add a second `QMessageBox` for the same action.
+5. PC-changing skills set `requires_confirmation=True`. In AI Chat, confirm via `ActionCard` only (or a short chat affirmation of that card) — do not add a second `QMessageBox` for the same action. Read-only skills (`requires_confirmation=False`) auto-run without a Confirm click.
 6. Keyword `propose_actions` is a fallback when the model emitted zero valid skills. Do not always-merge keyword cards with LLM skills.
-7. In the same change, update `ASSISTANT_SKILLS` / `ASSISTANT_TOOLS`, validation/execute wiring, `SKILL_DOMAINS`, `skills_list.md`, and focused tests under `tests/test_assistant_*.py` / `tests/test_ai_engine.py`.
+7. Capability questions ("what can you do", etc.) use a canned domain summary — do not require an inference round-trip.
+8. In the same change, update `ASSISTANT_SKILLS` / `ASSISTANT_TOOLS`, validation/execute wiring, `SKILL_DOMAINS`, `skills_list.md`, and focused tests under `tests/test_assistant_*.py` / `tests/test_ai_engine.py`.
 
 No skill or docs should imply that the LLM can run arbitrary shell commands, arbitrary Python, registry edits, unrestricted PowerShell, or arbitrary file deletion.

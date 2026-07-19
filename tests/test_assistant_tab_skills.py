@@ -1,9 +1,21 @@
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from app.assistant_core import AssistantSnapshot
+import pytest
+from PySide6.QtWidgets import QApplication
+
+from app.assistant_core import AssistantAction, AssistantSnapshot, READ_ONLY, MEDIUM_RISK
 from app.assistant_tab import AssistantTab, InferenceWorker
+from app.chat_widgets import ActionCard
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
 
 
 class FakeEngine:
@@ -91,3 +103,91 @@ def test_streaming_filter_hides_split_fenced_skill_json():
     assert "skill_request" not in visible
     assert "scan_cleanup" not in visible
     assert visible == "I can scan first.\n\nDone."
+
+
+def test_action_card_auto_run_hides_confirm_for_readonly(qapp):
+    action = AssistantAction(
+        id="1",
+        kind="scan_cleanup",
+        title="Scan",
+        description="Scan junk",
+        risk=READ_ONLY,
+        requires_confirmation=False,
+    )
+    card = ActionCard(action)
+    assert card.confirm_btn.isHidden() is True
+    assert card.cancel_btn.isHidden() is True
+
+    received = []
+    card.confirmed.connect(lambda act, c: received.append(act.kind))
+    card.begin_auto_run()
+    assert received == ["scan_cleanup"]
+    assert card.confirm_btn.text() == "Running…"
+
+
+def test_action_card_mutation_awaits_confirm(qapp):
+    action = AssistantAction(
+        id="2",
+        kind="empty_recycle_bin",
+        title="Empty",
+        description="Empty bin",
+        risk=MEDIUM_RISK,
+        requires_confirmation=True,
+    )
+    card = ActionCard(action)
+    assert card.awaiting_confirm is True
+    assert card.confirm_btn.isHidden() is False
+
+
+def test_is_affirmation_and_newest_pending(qapp):
+    tab = AssistantTab.__new__(AssistantTab)
+    tab._pending_confirm_cards = []
+    assert AssistantTab._is_affirmation(tab, "yes") is True
+    assert AssistantTab._is_affirmation(tab, "OK!") is True
+    assert AssistantTab._is_affirmation(tab, "why is it slow") is False
+
+    action = AssistantAction(
+        id="3",
+        kind="empty_recycle_bin",
+        title="Empty",
+        description="Empty bin",
+        risk=MEDIUM_RISK,
+        requires_confirmation=True,
+    )
+    card = ActionCard(action)
+    tab._pending_confirm_cards = [card]
+    assert tab._newest_pending_confirm_card() is card
+
+
+def test_capability_reply_skips_inference(qapp):
+    tab = AssistantTab.__new__(AssistantTab)
+    tab._history = []
+    tab._model_ready = True
+    tab._add_message = MagicMock()
+    tab._set_status = MagicMock()
+    with patch("app.assistant_tab.render_capability_user_answer", return_value="I can help with cleanup."):
+        AssistantTab._reply_capability(tab, "what can you do")
+    assert tab._add_message.call_count == 2
+    assert len(tab._history) == 1
+    assert "cleanup" in tab._history[0].assistant
+
+
+def test_action_queue_stores_while_busy(qapp):
+    tab = AssistantTab.__new__(AssistantTab)
+    tab._action_queue = []
+    tab._pending_action_card = object()
+    tab._action_worker = None
+    tab._set_status = MagicMock()
+    tab._worker_is_running = MagicMock(return_value=False)
+    action = AssistantAction(
+        id="4",
+        kind="flush_dns_cache",
+        title="Flush",
+        description="Flush DNS",
+        risk=READ_ONLY,
+        requires_confirmation=True,
+    )
+    card = ActionCard(action)
+    AssistantTab._run_action(tab, action, card)
+    assert tab._action_queue == [(action, card)]
+    assert card.confirm_btn.text() == "Queued…"

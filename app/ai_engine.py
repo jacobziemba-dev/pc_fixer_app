@@ -1,10 +1,11 @@
 import os
-import time
+from datetime import datetime
 from pathlib import Path
 
 from app.assistant_core import (
     AssistantTurn,
     collect_assistant_snapshot,
+    render_capability_overview,
     render_snapshot_context,
     render_skill_catalog,
     snapshot_has_useful_data,
@@ -14,13 +15,18 @@ DEFAULT_MODEL_FILENAME = "llama-3.2-3b-instruct-q4_k_m.gguf"
 DEFAULT_STOP_TOKENS = ["<|eot_id|>"]
 DEFAULT_SYSTEM_PROMPT = (
     "You are a Windows PC diagnostician inside the PC Fix app. "
+    "You can help with hardware & specs, processes & performance, storage & disks, "
+    "cleanup, network, startup apps, power & battery, security & updates, display, "
+    "audio, window layouts, and system tools. "
+    "The Capability overview lists every requestable skill name; the detailed catalog "
+    "adds argument schemas for skills most relevant to the current question. "
     "Use the system snapshot provided with each question. "
     "Use recent conversation only for continuity, not as hardware facts. "
     "Answer in 2-4 short sentences with practical advice. "
     "Do not invent hardware details, process names, adapters, or devices that are not in the snapshot. "
     "Prefer one skill request unless the user clearly asked for a multi-step plan. "
     "When an app action would help, explain what you found, recommend the next action, "
-    "and include fenced JSON skill requests only for known skills listed in the catalog. "
+    "and include fenced JSON skill requests only for known skills listed in the overview or catalog. "
     "If needed snapshot data is missing, say you need a refresh first and request the matching refresh skill. "
     "Never claim an action already ran before the app confirms it. "
     "The app validates every request and requires confirmation for PC-changing actions."
@@ -45,9 +51,11 @@ SNAPSHOT_UNAVAILABLE = "(system snapshot unavailable)"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = PROJECT_ROOT / "models"
 MAX_HISTORY_TURNS = 8
-MAX_HISTORY_CHARS = 1200
+MAX_HISTORY_CHARS = 1800
 DEFAULT_N_CTX = 4096
 DEFAULT_MAX_TOKENS = 320
+DEFAULT_REPEAT_PENALTY = 1.1
+SNAPSHOT_REUSE_TTL_SECONDS = 30
 
 
 class AIEngineError(Exception):
@@ -139,8 +147,14 @@ def format_chat_prompt(system_prompt, user_prompt, history=None):
     return "".join(parts)
 
 
-def compose_user_prompt(user_text, context=None, history=None, skill_catalog=None):
-    """Compose the current-turn user message (snapshot + catalog + question).
+def compose_user_prompt(
+    user_text,
+    context=None,
+    history=None,
+    skill_catalog=None,
+    capability_overview=None,
+):
+    """Compose the current-turn user message (snapshot + overview + catalog + question).
 
     History is passed separately to format_chat_prompt as native chat turns.
     The optional history argument is ignored here for backward compatibility.
@@ -149,6 +163,10 @@ def compose_user_prompt(user_text, context=None, history=None, skill_catalog=Non
     sections = []
     if context:
         sections.append(f"System snapshot:\n{context}")
+
+    overview = capability_overview if capability_overview is not None else render_capability_overview()
+    if overview:
+        sections.append(overview)
 
     if skill_catalog:
         sections.append(skill_catalog)
@@ -179,12 +197,24 @@ def _append_warnings(lines, cpu_percent=None, memory_percent=None, drives=None):
         lines.extend(f"- {warning}" for warning in warnings)
 
 
-def build_system_snapshot(include_cleanup=False):
-    """Build structured live PC context for the assistant and UI."""
+def _snapshot_is_reusable(snapshot, include_cleanup=False):
+    if snapshot is None or not getattr(snapshot, "timestamp", None):
+        return False
     try:
-        time.sleep(0.2)
+        age = (datetime.now() - snapshot.timestamp).total_seconds()
     except Exception:
-        pass
+        return False
+    if age < 0 or age > SNAPSHOT_REUSE_TTL_SECONDS:
+        return False
+    if include_cleanup and not getattr(snapshot, "cleanup_categories", None):
+        return False
+    return True
+
+
+def build_system_snapshot(include_cleanup=False, reuse_snapshot=None, force_refresh=False):
+    """Build structured live PC context for the assistant and UI."""
+    if not force_refresh and _snapshot_is_reusable(reuse_snapshot, include_cleanup=include_cleanup):
+        return reuse_snapshot
     return collect_assistant_snapshot(include_cleanup=include_cleanup)
 
 
@@ -249,6 +279,7 @@ class EmbeddedAI:
         temperature=0.3,
         stop=None,
         history=None,
+        repeat_penalty=DEFAULT_REPEAT_PENALTY,
     ):
         self._ensure_loaded()
         prompt = format_chat_prompt(system_prompt, user_prompt, history=history)
@@ -257,6 +288,7 @@ class EmbeddedAI:
             max_tokens=max_tokens,
             temperature=temperature,
             stop=stop or DEFAULT_STOP_TOKENS,
+            repeat_penalty=repeat_penalty,
         )
         return output["choices"][0]["text"].strip()
 
@@ -268,6 +300,7 @@ class EmbeddedAI:
         temperature=0.3,
         stop=None,
         history=None,
+        repeat_penalty=DEFAULT_REPEAT_PENALTY,
     ):
         self._ensure_loaded()
         prompt = format_chat_prompt(system_prompt, user_prompt, history=history)
@@ -276,6 +309,7 @@ class EmbeddedAI:
             max_tokens=max_tokens,
             temperature=temperature,
             stop=stop or DEFAULT_STOP_TOKENS,
+            repeat_penalty=repeat_penalty,
             stream=True,
         )
         for chunk in stream:

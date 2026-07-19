@@ -73,9 +73,9 @@ Each `app/*_tab.py` (e.g. `dashboard_tab.py`, `health_tab.py`, `cleanup_tab.py`,
 
 This is the most important architectural invariant in the codebase:
 
-1. The LLM only ever sees a rendered skill catalog (`render_skill_catalog`) and can only respond with fenced JSON skill requests matching known skill names.
+1. The LLM always sees a compact Capability overview of every skill name plus an intent-filtered detailed catalog (`render_capability_overview` / `render_skill_catalog`) and can only respond with fenced JSON skill requests matching known skill names.
 2. Every skill request is validated against `input_schema` and resolved against the current snapshot in Python (`validate_skill_request`, `skill_request_to_action`) — the model cannot supply a raw command, path, or arbitrary target.
-3. Any action with `requires_confirmation=True` must render as a confirmation card the user approves before `execute_assistant_action` runs it.
+3. Any action with `requires_confirmation=True` must render as a confirmation card the user approves (or affirms in chat) before `execute_assistant_action` runs it. Read-only skills auto-run in AI Chat.
 4. `skills_list.md` is the authoritative, human-readable mirror of `ASSISTANT_SKILLS` in `app/assistant_core.py` — **update it in the same change** whenever skills are added, removed, renamed, disabled, or have behavior changes.
 
 When adding a new skill: add it to `ASSISTANT_SKILLS`/`ASSISTANT_TOOLS`, add resolution/execution logic following the existing target-resolution pattern (`_resolve_display`, `_resolve_audio_session`, etc.), wire it into `execute_assistant_action`, and update `skills_list.md`.

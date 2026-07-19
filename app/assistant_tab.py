@@ -30,7 +30,9 @@ from app.assistant_core import (
     TAB_ACTION_KINDS,
     collect_assistant_snapshot,
     execute_assistant_action,
+    is_capability_question,
     propose_actions,
+    render_capability_user_answer,
     skill_requests_to_actions,
     snapshot_summary_rows,
     strip_skill_requests,
@@ -57,6 +59,15 @@ QUICK_ACTIONS = [
     ("Cleanup", "Free up space and remove junk.", CLEANUP_REVIEW_PROMPT, True),
     ("Network", "Diagnose network issues.", NETWORK_REVIEW_PROMPT, False),
 ]
+
+_AFFIRMATIONS = frozenset({
+    "yes", "y", "ok", "okay", "do it", "go ahead", "confirm", "sure", "please",
+})
+
+_CLEAN_IT_PHRASES = (
+    "clean it", "clean them", "delete the junk", "clean the junk",
+    "remove the junk", "go ahead and clean", "clean now",
+)
 
 
 class ModelLoadWorker(QThread):
@@ -112,6 +123,7 @@ class InferenceWorker(QThread):
         history=None,
         include_cleanup=False,
         system_prompt=DEFAULT_SYSTEM_PROMPT,
+        reuse_snapshot=None,
     ):
         super().__init__()
         self._engine = engine
@@ -120,6 +132,7 @@ class InferenceWorker(QThread):
         self._history = history or []
         self._include_cleanup = include_cleanup
         self._system_prompt = system_prompt
+        self._reuse_snapshot = reuse_snapshot
         self._stop_requested = False
 
     def request_stop(self):
@@ -127,7 +140,15 @@ class InferenceWorker(QThread):
 
     def run(self):
         try:
-            snapshot = build_system_snapshot(include_cleanup=self._include_cleanup)
+            force_refresh = any(
+                word in (self._display_text or "").lower()
+                for word in ("refresh", "hardware", "specs", "diagnose")
+            )
+            snapshot = build_system_snapshot(
+                include_cleanup=self._include_cleanup,
+                reuse_snapshot=self._reuse_snapshot,
+                force_refresh=force_refresh,
+            )
             self.snapshot_ready.emit(snapshot)
             context = render_snapshot_context(snapshot)
             prompt = compose_user_prompt(
@@ -207,6 +228,10 @@ class AssistantTab(QWidget):
         self._current_snapshot = None
         self._pending_action_card = None
         self._pending_actions = []
+        self._pending_confirm_cards = []
+        self._action_queue = []
+        self._last_action_kind = None
+        self._last_proposed_kinds = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -434,15 +459,23 @@ class AssistantTab(QWidget):
 
     def _add_action_cards(self, actions):
         self._pending_actions = list(actions or [])
-        for action in actions:
+        self._last_proposed_kinds = [action.kind for action in (actions or [])]
+        auto_run_cards = []
+        for action in actions or []:
             card = ActionCard(action)
             card.confirmed.connect(self._run_action)
             self.messages_layout.addWidget(card, 0, Qt.AlignLeft)
             self._update_empty_state()
+            if action.requires_confirmation:
+                self._pending_confirm_cards.append(card)
+            else:
+                auto_run_cards.append(card)
         if actions:
             if any(action.requires_confirmation for action in actions):
                 self._set_status("Waiting for confirm")
             QTimer.singleShot(0, self._scroll_to_bottom)
+        for card in auto_run_cards:
+            card.begin_auto_run()
 
     def _scroll_to_bottom(self):
         bar = self.scroll.verticalScrollBar()
@@ -458,18 +491,116 @@ class AssistantTab(QWidget):
         self._pending_user_text = ""
         self._current_assistant_bubble = None
         self._typing_indicator = None
+        self._pending_actions = []
+        self._pending_confirm_cards = []
+        self._action_queue = []
+        self._last_action_kind = None
+        self._last_proposed_kinds = []
         self._update_empty_state()
+
+    def _newest_pending_confirm_card(self):
+        while self._pending_confirm_cards:
+            card = self._pending_confirm_cards[-1]
+            try:
+                if card.awaiting_confirm:
+                    return card
+            except RuntimeError:
+                pass
+            self._pending_confirm_cards.pop()
+        return None
+
+    def _is_affirmation(self, text):
+        cleaned = (text or "").strip().lower().rstrip(".!")
+        return cleaned in _AFFIRMATIONS
+
+    def _is_clean_it_follow_up(self, text):
+        lowered = (text or "").strip().lower()
+        return any(phrase in lowered for phrase in _CLEAN_IT_PHRASES)
+
+    def _append_history_crumb(self, crumb):
+        if not crumb:
+            return
+        if self._history:
+            last = self._history[-1]
+            assistant = (last.assistant or "").rstrip()
+            if crumb not in assistant:
+                last.assistant = f"{assistant}\n{crumb}".strip()
+        else:
+            self._history.append(AssistantTurn(
+                user="",
+                assistant=crumb,
+                timestamp=datetime.now(),
+            ))
 
     def _send_message(self):
         user_text = self.input_dock.text().strip()
         if not user_text:
             return
         self.input_dock.clear()
-        self._start_inference(user_text, user_text, self._should_include_cleanup(user_text))
+        self._send_message_text(user_text)
 
     def _send_message_text(self, user_text):
         self.input_dock.clear()
-        self._start_inference(user_text, user_text, self._should_include_cleanup(user_text))
+        text = (user_text or "").strip()
+        if not text:
+            return
+        if self._try_affirmation_confirm(text):
+            return
+        if is_capability_question(text):
+            self._reply_capability(text)
+            return
+        if self._try_clean_it_follow_up(text):
+            return
+        self._start_inference(text, text, self._should_include_cleanup(text))
+
+    def _reply_capability(self, user_text):
+        answer = render_capability_user_answer()
+        self._add_message("user", user_text)
+        self._add_message("assistant", answer)
+        self._history.append(AssistantTurn(
+            user=user_text,
+            assistant=answer,
+            timestamp=datetime.now(),
+        ))
+        self._history = self._history[-8:]
+        self._set_status("Ready" if self._model_ready else "Model missing")
+
+    def _try_affirmation_confirm(self, user_text):
+        if not self._is_affirmation(user_text):
+            return False
+        card = self._newest_pending_confirm_card()
+        if card is None:
+            return False
+        self._add_message("user", user_text)
+        if card in self._pending_confirm_cards:
+            self._pending_confirm_cards.remove(card)
+        card._confirm()
+        return True
+
+    def _try_clean_it_follow_up(self, user_text):
+        if not self._is_clean_it_follow_up(user_text):
+            return False
+        if self._last_action_kind not in {
+            "scan_cleanup",
+            "clean_temp_files",
+            "clean_browser_cache",
+            "clean_thumbnail_cache",
+            "get_recycle_bin_size",
+        } and "scan_cleanup" not in self._last_proposed_kinds:
+            return False
+        snapshot = self._current_snapshot
+        if not snapshot or not getattr(snapshot, "cleanup_categories", None):
+            return False
+        follow_ups = self._follow_up_actions_for("scan_cleanup", snapshot)
+        if not follow_ups:
+            return False
+        self._add_message("user", user_text)
+        self._add_message(
+            "assistant",
+            "I can clean the scanned junk next. Confirm the cleanup action below.",
+        )
+        self._add_action_cards(follow_ups)
+        return True
 
     def _should_include_cleanup(self, text):
         lowered = text.lower()
@@ -498,6 +629,7 @@ class AssistantTab(QWidget):
             display_text,
             history=list(self._history),
             include_cleanup=include_cleanup,
+            reuse_snapshot=self._current_snapshot,
         )
         self._infer_worker.token_received.connect(self._on_token_received)
         self._infer_worker.snapshot_ready.connect(self._on_inference_snapshot_ready)
@@ -608,11 +740,19 @@ class AssistantTab(QWidget):
 
     def _on_inference_finished(self):
         answer = self._assistant_buffer.strip()
+        if self._last_proposed_kinds:
+            crumbs = " ".join(f"[proposed: {kind}]" for kind in self._last_proposed_kinds[:4])
+            answer = f"{answer}\n{crumbs}".strip() if answer else crumbs
+            self._assistant_buffer = answer
+            if self._current_assistant_bubble and crumbs:
+                # Keep UI bubble clean; crumbs are history-only.
+                pass
         if self._pending_user_text and answer:
             self._history.append(AssistantTurn(
                 user=self._pending_user_text,
                 assistant=answer,
                 timestamp=datetime.now(),
+                action_ids=list(self._last_proposed_kinds),
             ))
             self._history = self._history[-8:]
         self._finish_inference_ui("Ready")
@@ -645,13 +785,26 @@ class AssistantTab(QWidget):
             if hasattr(card, "mark_confirmed"):
                 card.mark_confirmed()
             self._add_message("system", f"Requested: {action.title}. Snapshot refresh started.")
+            self._last_action_kind = action.kind
+            self._append_history_crumb(f"[result ok: {action.kind} — requested]")
+            if card in self._pending_confirm_cards:
+                self._pending_confirm_cards.remove(card)
             return
 
-        def on_rejected(message):
-            if hasattr(card, "mark_cancelled"):
-                card.mark_cancelled()
-            self._add_message("system", message)
-            self._set_status("Ready" if self._model_ready else "Model missing")
+        if self._worker_is_running(self._action_worker) or self._pending_action_card is not None:
+            if hasattr(card, "mark_queued"):
+                card.mark_queued()
+            self._action_queue.append((action, card))
+            self._set_status("Action queued")
+            return
+
+        def on_rejected(_message):
+            self._pending_action_card = None
+            self._action_worker = None
+            if hasattr(card, "mark_queued"):
+                card.mark_queued()
+            self._action_queue.append((action, card))
+            self._set_status("Action queued")
 
         self._pending_action_card = card
         self._set_status("Running action")
@@ -662,15 +815,30 @@ class AssistantTab(QWidget):
             worker=self._action_worker,
             result_signal="finished_with_result",
             on_result=self._on_action_finished,
-            on_finished=self._clear_action_worker,
+            on_finished=self._on_action_worker_finished,
             on_rejected=on_rejected,
         )
         if not job_id:
-            self._action_worker = None
-            self._pending_action_card = None
+            # on_rejected already queued the action
+            return
 
     def _clear_action_worker(self):
         self._action_worker = None
+
+    def _on_action_worker_finished(self):
+        self._clear_action_worker()
+        self._drain_action_queue()
+
+    def _drain_action_queue(self):
+        if self._pending_action_card is not None or self._worker_is_running(self._action_worker):
+            return
+        while self._action_queue:
+            action, card = self._action_queue.pop(0)
+            try:
+                self._run_action(action, card)
+                return
+            except RuntimeError:
+                continue
 
     def _follow_up_actions_for(self, action_kind, snapshot):
         if not snapshot:
@@ -702,13 +870,24 @@ class AssistantTab(QWidget):
         if result.errors:
             message += "\n" + "\n".join(f"- {error}" for error in result.errors[:6])
         self._add_message(role, message)
+        action_kind = getattr(getattr(card, "action", None), "kind", None) or getattr(
+            getattr(card, "_action", None), "kind", None
+        )
         if card is not None:
             if result.success:
                 card.mark_confirmed()
                 card.set_result(True, result.message)
             else:
                 card.mark_failed(result.message)
-        action_kind = getattr(getattr(card, "_action", None), "kind", None)
+            if card in self._pending_confirm_cards:
+                self._pending_confirm_cards.remove(card)
+        if action_kind:
+            self._last_action_kind = action_kind
+            status = "ok" if result.success else "failed"
+            short = (result.message or "").replace("\n", " ").strip()
+            if len(short) > 80:
+                short = short[:77] + "..."
+            self._append_history_crumb(f"[result {status}: {action_kind} — {short}]")
         follow_ups = self._follow_up_actions_for(action_kind, snapshot if result.success else None)
         if follow_ups:
             self._add_action_cards(follow_ups)

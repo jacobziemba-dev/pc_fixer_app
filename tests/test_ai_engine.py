@@ -62,10 +62,126 @@ def test_build_skill_catalog_filters_by_intent():
     full = build_skill_catalog("what can you do")
     slow = build_skill_catalog("Why is my PC slow?")
     assert "scan_cleanup" in slow
+    assert "check_memory_pressure" in slow
+    assert "review_startup_impact" in slow
     assert len(slow) < len(full)
-    assert len(select_skill_names_for_prompt("Why is my PC slow?")) < len(
-        select_skill_names_for_prompt("what can you do")
+    slow_names = select_skill_names_for_prompt("Why is my PC slow?")
+    full_names = select_skill_names_for_prompt("what can you do")
+    assert len(slow_names) < len(full_names)
+    assert len(slow_names) > len(select_skill_names_for_prompt("hello there"))
+    # Compact full catalog omits Args lines.
+    assert "Args:" not in full
+    assert "Args:" in slow or "check_memory_pressure" in slow
+
+
+def test_compose_user_prompt_with_context():
+    result = compose_user_prompt("Why is it slow?", "CPU: 90%")
+    assert "System snapshot:" in result
+    assert "CPU: 90%" in result
+    assert "Capability overview" in result
+    assert "User question: Why is it slow?" in result
+
+
+def test_compose_user_prompt_with_skill_catalog():
+    result = compose_user_prompt(
+        "Clean junk?",
+        "CPU: 10%",
+        skill_catalog="Detailed skills:\n- scan_cleanup",
+        capability_overview="Capability overview:\n- cleanup: scan_cleanup",
     )
+
+    assert "System snapshot:" in result
+    assert "Capability overview:" in result
+    assert "Detailed skills:" in result
+    assert "scan_cleanup" in result
+    assert "User question: Clean junk?" in result
+
+
+def test_build_skill_catalog_mentions_skill_request_shape():
+    catalog = build_skill_catalog()
+
+    assert "skill_request" in catalog
+    assert "scan_cleanup" in catalog
+    assert "Detailed skills" in catalog
+
+
+def test_compose_user_prompt_without_context():
+    # Even without a snapshot, the capability overview is always injected.
+    result = compose_user_prompt("Hello", capability_overview="")
+    assert result == "Hello"
+    with_overview = compose_user_prompt("Hello")
+    assert "Capability overview" in with_overview
+    assert "User question: Hello" in with_overview
+
+
+def test_compose_user_prompt_does_not_inline_history():
+    history = [AssistantTurn("What is high?", "CPU is high.", MagicMock())]
+
+    result = compose_user_prompt("What next?", "CPU: 90%", history)
+
+    assert "System snapshot:" in result
+    assert "Recent conversation:" not in result
+    assert "Assistant: CPU is high." not in result
+    assert "User question: What next?" in result
+
+
+def test_default_system_prompt_mentions_capability_domains():
+    from app.ai_engine import DEFAULT_SYSTEM_PROMPT
+
+    assert "Capability overview" in DEFAULT_SYSTEM_PROMPT
+    assert "cleanup" in DEFAULT_SYSTEM_PROMPT
+    assert "network" in DEFAULT_SYSTEM_PROMPT
+
+
+def test_build_system_context_happy_path():
+    mocks = _mock_sysinfo_happy()
+    with patch.multiple("app.assistant_core.sysinfo", **mocks):
+        context = build_system_context()
+
+    mocks["prime_process_cpu_percent"].assert_called_once()
+    assert "CPU: 34%" in context
+    assert "RAM:" in context
+    assert "38%" in context
+    assert "Disk C:\\:" in context
+    assert "Startup apps: 1 detected" in context
+    assert "chrome.exe" in context
+    assert "code.exe" in context
+
+
+def test_build_system_context_partial_failure():
+    mocks = _mock_sysinfo_happy()
+    mocks["get_disk_usage"] = MagicMock(side_effect=RuntimeError("disk boom"))
+    with patch.multiple("app.assistant_core.sysinfo", **mocks):
+        context = build_system_context()
+
+    assert "CPU: 34%" in context
+    assert "RAM:" in context
+    assert "chrome.exe" in context
+    assert "Disk: unavailable" in context
+
+
+def test_build_system_context_total_failure():
+    from app.assistant_core import clear_heavy_snapshot_cache
+
+    clear_heavy_snapshot_cache()
+    failing = MagicMock(side_effect=RuntimeError("boom"))
+    with patch("app.assistant_core.sysinfo.prime_process_cpu_percent", failing), \
+         patch("app.assistant_core.sysinfo.get_cpu_stats", failing), \
+         patch("app.assistant_core.sysinfo.get_memory_stats", failing), \
+         patch("app.assistant_core.sysinfo.get_disk_usage", failing), \
+         patch("app.assistant_core.sysinfo.get_network_counters", failing), \
+         patch("app.assistant_core.sysinfo.get_hardware_info", failing), \
+         patch("app.assistant_core.sysinfo.get_startup_items", failing), \
+         patch("app.assistant_core.sysinfo.get_installed_programs", failing), \
+         patch("app.assistant_core.sysinfo.get_top_processes", failing), \
+         patch("app.assistant_core.sysinfo.get_display_devices", failing), \
+         patch("app.assistant_core.toolbox.list_network_adapter_names", failing), \
+         patch("app.assistant_core._audio_snapshot", failing), \
+         patch("app.assistant_core._layout_snapshot", failing):
+        context = build_system_context()
+
+    assert context == SNAPSHOT_UNAVAILABLE
+    clear_heavy_snapshot_cache()
 
 
 def test_missing_model_message_includes_path():
@@ -216,35 +332,6 @@ def _mock_sysinfo_happy():
     }
 
 
-def test_compose_user_prompt_with_context():
-    result = compose_user_prompt("Why is it slow?", "CPU: 90%")
-    assert "System snapshot:" in result
-    assert "CPU: 90%" in result
-    assert "User question: Why is it slow?" in result
-
-
-def test_compose_user_prompt_with_skill_catalog():
-    result = compose_user_prompt("Clean junk?", "CPU: 10%", skill_catalog="Available assistant skills:\n- scan_cleanup")
-
-    assert "System snapshot:" in result
-    assert "Available assistant skills:" in result
-    assert "scan_cleanup" in result
-    assert "User question: Clean junk?" in result
-
-
-def test_build_skill_catalog_mentions_skill_request_shape():
-    catalog = build_skill_catalog()
-
-    assert "skill_request" in catalog
-    assert "scan_cleanup" in catalog
-
-
-def test_compose_user_prompt_without_context():
-    assert compose_user_prompt("Hello") == "Hello"
-    assert compose_user_prompt("Hello", None) == "Hello"
-    assert compose_user_prompt("Hello", "") == "Hello"
-
-
 def test_trim_chat_history_keeps_newest_turns():
     history = [{"user": f"u{i}", "assistant": f"a{i}"} for i in range(10)]
     trimmed = trim_chat_history(history, max_turns=3)
@@ -261,17 +348,6 @@ def test_format_chat_history_uses_user_and_assistant_lines():
     assert "Assistant: CPU is high." in result
 
 
-def test_compose_user_prompt_does_not_inline_history():
-    history = [AssistantTurn("What is high?", "CPU is high.", MagicMock())]
-
-    result = compose_user_prompt("What next?", "CPU: 90%", history)
-
-    assert "System snapshot:" in result
-    assert "Recent conversation:" not in result
-    assert "Assistant: CPU is high." not in result
-    assert "User question: What next?" in result
-
-
 def test_trim_chat_history_respects_char_budget():
     history = [
         {"user": "u" * 400, "assistant": "a" * 400},
@@ -286,51 +362,30 @@ def _turn_user(turn):
     return turn["user"] if isinstance(turn, dict) else turn.user
 
 
-def test_build_system_context_happy_path():
-    mocks = _mock_sysinfo_happy()
-    with patch("app.ai_engine.time.sleep") as sleep_mock, \
-         patch.multiple("app.assistant_core.sysinfo", **mocks):
-        context = build_system_context()
+def test_max_history_chars_raised_for_continuity():
+    from app.ai_engine import MAX_HISTORY_CHARS
 
-    sleep_mock.assert_called_once_with(0.2)
-    mocks["prime_process_cpu_percent"].assert_called_once()
-    assert "CPU: 34%" in context
-    assert "RAM:" in context
-    assert "38%" in context
-    assert "Disk C:\\:" in context
-    assert "Startup apps: 1 detected" in context
-    assert "chrome.exe" in context
-    assert "code.exe" in context
+    assert MAX_HISTORY_CHARS >= 1800
 
 
-def test_build_system_context_partial_failure():
-    mocks = _mock_sysinfo_happy()
-    mocks["get_disk_usage"] = MagicMock(side_effect=RuntimeError("disk boom"))
-    with patch("app.ai_engine.time.sleep"), \
-         patch.multiple("app.assistant_core.sysinfo", **mocks):
-        context = build_system_context()
+def test_repeat_penalty_default_passed_to_llama(tmp_path):
+    model_file = tmp_path / "model.gguf"
+    model_file.write_bytes(b"fake")
+    mock_llm = MagicMock(return_value={"choices": [{"text": " hi "}]})
+    mock_cls = MagicMock(return_value=mock_llm)
+    engine = EmbeddedAI(model_path=model_file)
 
-    assert "CPU: 34%" in context
-    assert "RAM:" in context
-    assert "chrome.exe" in context
-    assert "Disk: unavailable" in context
+    with _install_fake_llama(mock_cls):
+        engine.load()
+        engine.query("sys", "user")
+
+    assert mock_llm.call_args.kwargs.get("repeat_penalty") == 1.1
 
 
-def test_build_system_context_total_failure():
-    failing = MagicMock(side_effect=RuntimeError("boom"))
-    with patch("app.ai_engine.time.sleep"), \
-         patch("app.assistant_core.sysinfo.prime_process_cpu_percent", failing), \
-         patch("app.assistant_core.sysinfo.get_cpu_stats", failing), \
-         patch("app.assistant_core.sysinfo.get_memory_stats", failing), \
-         patch("app.assistant_core.sysinfo.get_disk_usage", failing), \
-         patch("app.assistant_core.sysinfo.get_network_counters", failing), \
-         patch("app.assistant_core.sysinfo.get_hardware_info", failing), \
-         patch("app.assistant_core.sysinfo.get_startup_items", failing), \
-         patch("app.assistant_core.sysinfo.get_installed_programs", failing), \
-         patch("app.assistant_core.sysinfo.get_top_processes", failing), \
-         patch("app.assistant_core.sysinfo.get_display_devices", failing), \
-         patch("app.assistant_core._audio_snapshot", failing), \
-         patch("app.assistant_core._layout_snapshot", failing):
-        context = build_system_context()
+def test_capability_overview_budget():
+    from app.assistant_core import render_capability_overview
 
-    assert context == SNAPSHOT_UNAVAILABLE
+    overview = render_capability_overview()
+    assert "Capability overview" in overview
+    assert "scan_cleanup" in overview
+    assert len(overview) <= 2500
